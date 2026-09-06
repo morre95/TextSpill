@@ -97,26 +97,40 @@ The `ydotool` package ships a udev rule that gives the `input` group access to
 Bind `textspill toggle` in your compositor. TextSpill itself is compositor-agnostic; it
 never grabs a key.
 
-**Hyprland / Omarchy** — add to `~/.config/hypr/bindings.conf`:
+**Omarchy** — add to `~/.config/hypr/bindings.lua`, where personal overrides live:
 
-```ini
-bindd = SUPER, D, Dictate, exec, textspill toggle
+```lua
+o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
 ```
 
-`SUPER + SPACE` is Omarchy's menu. If you want it for dictation anyway, unbind it first:
+`SUPER + .` is free on a stock Omarchy install; the emoji picker is on
+`SUPER + CTRL + E`, and only `SUPER + CTRL + .` (Transcode) uses the period key.
+`SUPER + SPACE` is the Omarchy menu — if you want that key for dictation, unbind it
+first:
 
-```ini
-unbind = SUPER, SPACE
-bindd = SUPER, SPACE, Dictate, exec, textspill toggle
+```lua
+hl.unbind("SUPER + SPACE")
+o.bind("SUPER + SPACE", "Dictate", "textspill toggle")
 ```
 
-Reload with `hyprctl reload`.
+Then `hyprctl reload` and confirm with `hyprctl configerrors` (silence means clean) and
+`omarchy menu keybindings --print | grep Dictate`.
+
+**Plain Hyprland** — in `hyprland.conf`:
+
+```ini
+bind = SUPER, PERIOD, exec, textspill toggle
+```
 
 **Sway / river / other wlroots:**
 
 ```
-bindsym $mod+d exec textspill toggle
+bindsym $mod+period exec textspill toggle
 ```
+
+`textspill` must be on the compositor's `PATH`. Check with
+`tr '\0' '\n' < /proc/$(pgrep -x Hyprland)/environ | grep ^PATH=` — if `~/.local/bin`
+is missing, use the absolute path in the binding.
 
 ## Use
 

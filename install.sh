@@ -57,9 +57,10 @@ Done. Remaining steps:
        sudo usermod -aG input "$USER"     # log out and back in
        systemctl --user enable --now ydotool.service
 
-  3. Bind the hotkey, e.g. in ~/.config/hypr/bindings.conf:
-       bindd = SUPER, D, Dictate, exec, textspill toggle
-     (SUPER+SPACE is Omarchy's menu; `unbind = SUPER, SPACE` first if you want it.)
+  3. Bind the hotkey. On Omarchy, in ~/.config/hypr/bindings.lua:
+       o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
+     then `hyprctl reload`. (SUPER+SPACE is the Omarchy menu; unbind it first
+     with `hl.unbind("SUPER + SPACE")` if you want that key instead.)
 
   4. Make sure ~/.local/bin is on your PATH.
 
