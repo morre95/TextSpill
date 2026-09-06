@@ -144,6 +144,20 @@ textspill status     # idle | recording | transcribing
 
 `status` never blocks, so it is safe to poll from a bar module.
 
+### Push-to-talk
+
+Hold the key instead of toggling. This needs no extra code — `start` and `stop` already
+do the two halves — only a second binding with Hyprland's `release` flag:
+
+```lua
+o.bind("SUPER + PERIOD", "Dictate (hold)", "textspill start")
+o.bind("SUPER + PERIOD", nil, "textspill stop", { release = true })
+```
+
+Toggle mode suits long dictations; push-to-talk suits short ones, where releasing the key
+is faster than aiming for it a second time. Pick one — binding both to the same key would
+start a recording on press and immediately stop it on release.
+
 ## Configuration
 
 ### Vocabulary
@@ -234,6 +248,18 @@ textspill start && textspill status                # recording
 echo 999999 > "$XDG_RUNTIME_DIR/textspill/recording.pid"
 textspill status                                   # idle — stale PID cleaned up
 ```
+
+## Tests
+
+```bash
+cargo test                  # 16 tests: state machine, PID handling, lock, IPC protocol
+python3 asr/test_daemon.py  # 18 tests: request validation, socket protocol, vocabulary
+```
+
+The Python suite stubs out Qwen3-ASR, so it needs neither the virtualenv nor a GPU. The
+IPC tests run against a real Unix socket with a scripted daemon, covering the replies that
+matter: success, an error object, invalid JSON, a silent close, and a daemon that never
+answers.
 
 ## End-to-end test
 
@@ -339,7 +365,6 @@ protocols, is a change to one file.
 
 ## Roadmap
 
-- Push-to-talk (hold the key instead of toggling)
 - Streaming ASR for lower perceived latency
 - Native PipeWire capture instead of `pw-record`
 - Context profiles (`textspill --profile coding toggle`) and project vocabularies

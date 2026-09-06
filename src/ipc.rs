@@ -40,6 +40,7 @@ struct Response {
 }
 
 /// A successful transcription.
+#[derive(Debug)]
 pub struct Transcription {
     pub text: String,
     pub language: Option<String>,
@@ -59,6 +60,7 @@ pub fn transcribe(socket: &Path, wav: &Path, read_timeout: Duration) -> Result<T
     })?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     stream.set_read_timeout(Some(read_timeout))?;
+    tracing::debug!(socket = %socket.display(), "connected to ASR daemon");
 
     let started = Instant::now();
     let mut writer = &stream;
@@ -111,5 +113,135 @@ fn truncate(s: &str, max: usize) -> &str {
     match s.char_indices().nth(max) {
         Some((idx, _)) => &s[..idx],
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::thread;
+
+    /// Serves one connection with a scripted reply, then closes.
+    ///
+    /// Replaying the daemon's side over a real socket is what makes these tests
+    /// worth having: they exercise connect, framing, timeouts and parsing
+    /// exactly as the hotkey path does.
+    struct FakeDaemon {
+        socket: PathBuf,
+        _dir: PathBuf,
+    }
+
+    impl FakeDaemon {
+        fn new(name: &str, reply: Option<&'static [u8]>) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("textspill-ipc-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let socket = dir.join("asr.sock");
+            let _ = std::fs::remove_file(&socket);
+
+            let listener = UnixListener::bind(&socket).unwrap();
+            thread::spawn(move || {
+                let Ok((mut conn, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = String::new();
+                BufReader::new(conn.try_clone().unwrap())
+                    .read_line(&mut request)
+                    .ok();
+                match reply {
+                    Some(bytes) => {
+                        conn.write_all(bytes).ok();
+                    }
+                    // Hold the connection open without answering, to drive the
+                    // client into its read timeout.
+                    None => thread::sleep(Duration::from_secs(30)),
+                }
+            });
+
+            Self { socket, _dir: dir }
+        }
+
+        fn ask(&self) -> Result<Transcription> {
+            transcribe(
+                &self.socket,
+                Path::new("/run/user/1000/textspill/recording.wav"),
+                Duration::from_millis(300),
+            )
+        }
+    }
+
+    #[test]
+    fn parses_a_successful_reply() {
+        let daemon = FakeDaemon::new(
+            "ok",
+            Some(b"{\"text\":\"hej v\xc3\xa4rlden\",\"language\":\"Swedish\"}\n"),
+        );
+        let result = daemon.ask().expect("should succeed");
+        assert_eq!(result.text, "hej världen");
+        assert_eq!(result.language.as_deref(), Some("Swedish"));
+    }
+
+    #[test]
+    fn accepts_a_reply_without_a_language() {
+        let daemon = FakeDaemon::new("nolang", Some(b"{\"text\":\"hello\"}\n"));
+        let result = daemon.ask().expect("language is optional");
+        assert_eq!(result.text, "hello");
+        assert_eq!(result.language, None);
+    }
+
+    #[test]
+    fn surfaces_a_daemon_error() {
+        let daemon = FakeDaemon::new("err", Some(b"{\"error\":\"CUDA out of memory\"}\n"));
+        let e = daemon.ask().expect_err("an error reply must not succeed");
+        assert!(e.to_string().contains("CUDA out of memory"), "{e}");
+    }
+
+    #[test]
+    fn rejects_invalid_json() {
+        let daemon = FakeDaemon::new("garbage", Some(b"<html>502</html>\n"));
+        let e = daemon.ask().expect_err("garbage must not parse");
+        assert!(e.to_string().contains("invalid JSON"), "{e}");
+    }
+
+    #[test]
+    fn rejects_a_reply_with_neither_text_nor_error() {
+        let daemon = FakeDaemon::new("neither", Some(b"{\"language\":\"Swedish\"}\n"));
+        let e = daemon.ask().expect_err("an empty reply must not succeed");
+        assert!(e.to_string().contains("neither"), "{e}");
+    }
+
+    #[test]
+    fn detects_a_daemon_that_closes_without_replying() {
+        let daemon = FakeDaemon::new("die", Some(b""));
+        let e = daemon.ask().expect_err("a silent close must not succeed");
+        assert!(e.to_string().contains("without replying"), "{e}");
+    }
+
+    #[test]
+    fn times_out_instead_of_hanging_forever() {
+        let daemon = FakeDaemon::new("hang", None);
+        let started = Instant::now();
+        let e = daemon.ask().expect_err("a hung daemon must not block");
+        assert!(e.to_string().contains("did not answer"), "{e}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "returned after {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn reports_a_missing_daemon_with_a_hint() {
+        let e = transcribe(
+            Path::new("/nonexistent/textspill/asr.sock"),
+            Path::new("/tmp/recording.wav"),
+            Duration::from_millis(300),
+        )
+        .expect_err("no socket means no daemon");
+        let message = e.to_string();
+        assert!(message.contains("not reachable"), "{message}");
+        assert!(message.contains("systemctl --user start"), "{message}");
     }
 }

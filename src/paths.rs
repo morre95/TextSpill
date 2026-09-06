@@ -73,6 +73,15 @@ impl Paths {
     }
 }
 
+#[cfg(test)]
+impl Paths {
+    /// Builds `Paths` over an existing directory, for tests that must not touch
+    /// the real runtime dir.
+    pub fn for_test(runtime_dir: PathBuf) -> Self {
+        Self { runtime_dir }
+    }
+}
+
 /// `$XDG_RUNTIME_DIR`, or a private `/tmp` directory when it is unset.
 fn runtime_base() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
