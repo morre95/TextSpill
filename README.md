@@ -147,16 +147,23 @@ textspill status     # idle | recording | transcribing
 ### Push-to-talk
 
 Hold the key instead of toggling. This needs no extra code — `start` and `stop` already
-do the two halves — only a second binding with Hyprland's `release` flag:
+do the two halves — only Hyprland's `release` flag on a second binding:
 
 ```lua
-o.bind("SUPER + PERIOD", "Dictate (hold)", "textspill start")
-o.bind("SUPER + PERIOD", nil, "textspill stop", { release = true })
+-- Toggle: press to start, press again to transcribe. For longer dictations.
+o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
+
+-- Push-to-talk: hold while speaking, release to transcribe. For short ones.
+o.bind("SUPER + SHIFT + PERIOD", "Dictate (hold)", "textspill start")
+o.bind("SUPER + SHIFT + PERIOD", nil, "textspill stop", { release = true })
 ```
 
-Toggle mode suits long dictations; push-to-talk suits short ones, where releasing the key
-is faster than aiming for it a second time. Pick one — binding both to the same key would
-start a recording on press and immediately stop it on release.
+Both modes can coexist on different keys, as above. Do not put them on the *same* key:
+the press would start a recording and the release would immediately stop it.
+
+A tap shorter than the recorder's startup takes `stop` into the lock while `start` still
+holds it. That is handled — `acquire_lock` waits rather than refusing — so the worst case
+is a "Nothing recorded" notification, never a recording left running.
 
 ## Configuration
 
@@ -325,8 +332,11 @@ presses raced, and the lock did its job — exactly one of them acted.
   PID is alive *and* still named `pw-record`, so a crashed recorder reads as `idle`, the
   stale file is cleaned up, and a recycled PID is never signalled.
 - **One lock per command.** State-changing commands hold an `flock` on
-  `textspill.lock`, so a double hotkey press cannot start two recorders. The kernel
-  releases it on exit, so a crash cannot wedge it. `status` is read-only and never takes it.
+  `textspill.lock`, so a double hotkey press cannot start two recorders. A second command
+  waits up to three seconds rather than failing — push-to-talk releases the key
+  milliseconds after pressing it — and then gives up with a clear message rather than
+  blocking the hotkey. The kernel releases the lock on exit, so a crash cannot wedge it.
+  `status` is read-only and never takes it.
 - **Audio survives failure.** `recording.wav` is only deleted after a successful spill, or
   by the next `start`. If the daemon is down, the dictation is still on disk.
 - **Newlines are flattened.** A newline on the clipboard is an Enter keypress when pasted
