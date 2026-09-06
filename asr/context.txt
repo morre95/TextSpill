@@ -1,0 +1,68 @@
+# Vocabulary passed to Qwen3-ASR as recognition context, one term per line.
+#
+# It biases the model towards words that dictation software otherwise mangles:
+# product names, tool names and acronyms. Keep it to terms you actually say —
+# a long list dilutes the bias and costs a little latency.
+#
+# Copy this file to ~/.config/textspill/context.txt to customise it; that copy
+# takes precedence and survives updates. Restart the service after editing:
+#     systemctl --user restart textspill-asr.service
+
+# TextSpill itself
+TextSpill
+
+# CLI agents
+Claude
+Claude Code
+Codex
+Grok
+ChatGPT
+
+# Version control and hosting
+Git
+GitHub
+GitLab
+commit
+merge
+rebase
+pull request
+repo
+
+# Languages and tooling
+Rust
+Cargo
+crate
+Python
+TypeScript
+JavaScript
+React
+Node
+npm
+JSON
+YAML
+TOML
+API
+REST
+SDK
+CLI
+SSH
+HTTP
+Docker
+Kubernetes
+PostgreSQL
+SQL
+
+# The system this runs on
+Arch Linux
+Linux
+systemd
+Wayland
+Hyprland
+PipeWire
+Neovim
+Vim
+Firefox
+Chromium
+Alacritty
+Ghostty
+tmux

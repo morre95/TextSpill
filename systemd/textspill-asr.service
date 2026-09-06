@@ -1,0 +1,23 @@
+[Unit]
+Description=TextSpill Qwen3-ASR daemon
+Documentation=https://github.com/cryptofarian/textspill
+
+[Service]
+Type=simple
+# The whole point of the service: Qwen3-ASR is loaded once and stays resident
+# in RAM/VRAM, so a dictation never pays the model load time.
+ExecStart=%h/.local/share/textspill/venv/bin/python %h/.local/share/textspill/daemon.py
+Restart=on-failure
+RestartSec=5
+# Model loading can take a while on a cold page cache.
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+Environment=PYTHONUNBUFFERED=1
+# Keep the model download out of the home directory root.
+Environment=HF_HOME=%h/.cache/huggingface
+
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

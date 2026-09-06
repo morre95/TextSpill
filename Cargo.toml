@@ -1,0 +1,30 @@
+[package]
+name = "textspill"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "System-wide voice-to-text for Linux. Speak, transcribe, spill text wherever your cursor is."
+license = "MIT"
+repository = "https://github.com/cryptofarian/textspill"
+
+[[bin]]
+name = "textspill"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Only for sending signals to the detached pw-record process; everything else
+# (file locking, unix sockets, process spawning) comes from std.
+nix = { version = "0.31", default-features = false, features = ["signal", "user"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
