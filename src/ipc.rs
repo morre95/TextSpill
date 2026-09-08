@@ -29,6 +29,7 @@ const MAX_RESPONSE_BYTES: u64 = 1 << 20;
 #[derive(Serialize)]
 struct Request<'a> {
     audio_path: &'a str,
+    preview: bool,
 }
 
 /// Either `{"text": ..., "language": ...}` or `{"error": ...}`.
@@ -48,6 +49,19 @@ pub struct Transcription {
 
 /// Sends `wav` to the daemon at `socket` and waits for the transcription.
 pub fn transcribe(socket: &Path, wav: &Path, read_timeout: Duration) -> Result<Transcription> {
+    request(socket, wav, read_timeout, false)
+}
+
+pub fn preview(socket: &Path, wav: &Path) -> Result<Transcription> {
+    request(socket, wav, Duration::from_secs(30), true)
+}
+
+fn request(
+    socket: &Path,
+    wav: &Path,
+    read_timeout: Duration,
+    preview: bool,
+) -> Result<Transcription> {
     let audio_path = wav
         .to_str()
         .ok_or_else(|| anyhow!("recording path is not valid UTF-8"))?;
@@ -64,7 +78,10 @@ pub fn transcribe(socket: &Path, wav: &Path, read_timeout: Duration) -> Result<T
 
     let started = Instant::now();
     let mut writer = &stream;
-    let mut line = serde_json::to_vec(&Request { audio_path })?;
+    let mut line = serde_json::to_vec(&Request {
+        audio_path,
+        preview,
+    })?;
     line.push(b'\n');
     writer
         .write_all(&line)

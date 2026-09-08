@@ -5,6 +5,65 @@
 //! swallows failure into a log line instead of an error.
 
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Replace the live bubble by its explicit notification ID. Do not rely on
+/// vendor-specific hints, and never wait indefinitely for the desktop bus.
+pub fn live(text: &str, id: &mut Option<u32>) {
+    let body: String = text
+        .chars()
+        .rev()
+        .take(240)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    // Notification bodies may be markup. Treat ASR output strictly as text.
+    let body = body
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let mut command = Command::new("notify-send");
+    command.args([
+        "--app-name",
+        APP_NAME,
+        "--print-id",
+        "--transient",
+        "--expire-time",
+        "2500",
+    ]);
+    if let Some(id) = id {
+        command.args(["--replace-id", &id.to_string()]);
+    }
+    let Ok(mut child) = command
+        .arg("--")
+        .arg("🎙 Live · preliminary")
+        .arg(body)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+    if let Ok(output) = child.wait_with_output()
+        && output.status.success()
+    {
+        *id = String::from_utf8_lossy(&output.stdout).trim().parse().ok();
+    }
+}
 
 const APP_NAME: &str = "TextSpill";
 

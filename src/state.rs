@@ -63,6 +63,14 @@ fn live_pid(path: &Path, comm: &str) -> Result<Option<i32>> {
 
 /// True if `pid` exists and its executable name is `comm`.
 pub fn is_running(pid: i32, comm: &str) -> bool {
+    // A failed child can remain in /proc until its parent reaps it. Zombies
+    // neither record nor respond to signals and must be treated as stale.
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat"))
+        && let Some((_, tail)) = stat.rsplit_once(") ")
+        && matches!(tail.as_bytes().first(), Some(b'Z' | b'X'))
+    {
+        return false;
+    }
     match fs::read_to_string(format!("/proc/{pid}/comm")) {
         // /proc/<pid>/comm is truncated to 15 characters by the kernel.
         Ok(actual) => actual.trim_end() == &comm[..comm.len().min(15)],

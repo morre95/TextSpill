@@ -9,6 +9,7 @@ mod audio;
 mod clipboard;
 mod input;
 mod ipc;
+mod live;
 mod notify;
 mod paths;
 mod state;
@@ -40,7 +41,7 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Subcommand, Clone, Copy)]
+#[derive(Subcommand)]
 enum Command {
     /// Start recording, or stop and spill the transcription. Bind this to a hotkey.
     Toggle,
@@ -52,6 +53,13 @@ enum Command {
     Cancel,
     /// Print `idle`, `recording` or `transcribing`.
     Status,
+    /// Print the latest provisional transcription (JSON with --json).
+    Preview {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(hide = true)]
+    LiveWorker { session: String, recorder: i32 },
 }
 
 fn main() -> ExitCode {
@@ -84,6 +92,19 @@ fn init_tracing() {
 fn run(command: Command) -> Result<()> {
     let paths = Paths::new()?;
     match command {
+        Command::LiveWorker { session, recorder } => live::worker(&paths, &session, recorder),
+        Command::Preview { json } => {
+            let preview = live::read(&paths)?;
+            if json {
+                println!("{}", serde_json::to_string(&preview)?);
+            } else if let Some(preview) = preview {
+                if let Some(error) = preview.error {
+                    anyhow::bail!("{error}");
+                }
+                println!("{}", preview.text);
+            }
+            Ok(())
+        }
         // Read-only, and must never block on a running transcription.
         Command::Status => {
             println!("{}", state::current(&paths)?);
@@ -125,11 +146,15 @@ fn cmd_start(paths: &Paths) -> Result<()> {
 
     let wav = paths.recording_wav();
     let log = paths.capture_log();
+    live::invalidate(paths)?;
     // Drop any recording kept from a previous failure before overwriting it.
     remove_if_present(&wav)?;
 
     let pid = audio::start(&wav, &log)?;
-    state::write_pid(&paths.recording_pid(), pid)?;
+    if let Err(error) = state::write_pid(&paths.recording_pid(), pid) {
+        let _ = audio::stop(pid);
+        return Err(error);
+    }
     notify::recording();
 
     // Verified after notifying: the user hears no delay, but a recorder that
@@ -137,6 +162,9 @@ fn cmd_start(paths: &Paths) -> Result<()> {
     if let Err(e) = audio::confirm_started(pid, &log) {
         state::remove_pid(&paths.recording_pid())?;
         return Err(e);
+    }
+    if let Err(error) = live::start(paths, pid) {
+        tracing::warn!(%error, "live preview unavailable; recording continues");
     }
     Ok(())
 }
@@ -147,6 +175,7 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
         return Ok(());
     };
 
+    live::invalidate(paths)?;
     audio::stop(pid)?;
     state::remove_pid(&paths.recording_pid())?;
 
@@ -194,6 +223,7 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
 }
 
 fn cmd_cancel(paths: &Paths) -> Result<()> {
+    live::invalidate(paths)?;
     let State::Recording { pid } = state::current(paths)? else {
         notify::info("Not recording");
         return Ok(());

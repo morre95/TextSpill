@@ -58,7 +58,7 @@ Done. Remaining steps:
        systemctl --user enable --now ydotool.service
 
   3. Bind the hotkey. On Omarchy, in ~/.config/hypr/bindings.lua:
-       o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
+       o.bind("CTRL + SHIFT + INSERT", "Dictate", "textspill toggle")
      then `hyprctl reload`. (SUPER+SPACE is the Omarchy menu; unbind it first
      with `hl.unbind("SUPER + SPACE")` if you want that key instead.)
 

@@ -4,6 +4,8 @@
 
 Press a hotkey, talk in Swedish or English, press it again. The transcription lands at
 your cursor — in a terminal, in Claude Code, in Codex, in Firefox, in Neovim.
+While you speak, a live notification shows provisional text. The final text is
+copied and pasted only when you stop.
 
 TextSpill **never presses Enter**. It types the text and stops. What you do with it is
 your call.
@@ -26,10 +28,11 @@ your call.
             └──────────────────────┘
 ```
 
-Two processes, on purpose:
+Rust client and a warm Python model:
 
 - **`textspill`** (Rust) is the thing your hotkey runs. It starts in a few milliseconds,
   records, asks, pastes, exits. It does no machine learning.
+  A detached Rust worker produces live previews for the current recording.
 - **`textspill-asr.service`** (Python) loads Qwen3-ASR **once** and keeps it resident.
   A dictation never pays the model load time — that is the whole latency design.
 
@@ -100,11 +103,11 @@ never grabs a key.
 **Omarchy** — add to `~/.config/hypr/bindings.lua`, where personal overrides live:
 
 ```lua
-o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
+o.bind("CTRL + SHIFT + INSERT", "Dictate", "textspill toggle")
 ```
 
-`SUPER + .` is free on a stock Omarchy install; the emoji picker is on
-`SUPER + CTRL + E`, and only `SUPER + CTRL + .` (Transcode) uses the period key.
+The local toggle binding is `CTRL + SHIFT + INSERT`. Check your compositor's
+existing bindings before assigning it on another machine.
 `SUPER + SPACE` is the Omarchy menu — if you want that key for dictation, unbind it
 first:
 
@@ -119,13 +122,13 @@ Then `hyprctl reload` and confirm with `hyprctl configerrors` (silence means cle
 **Plain Hyprland** — in `hyprland.conf`:
 
 ```ini
-bind = SUPER, PERIOD, exec, textspill toggle
+bind = CTRL SHIFT, INSERT, exec, textspill toggle
 ```
 
-**Sway / river / other wlroots:**
+**Sway:**
 
 ```
-bindsym $mod+period exec textspill toggle
+bindsym Ctrl+Shift+Insert exec textspill toggle
 ```
 
 `textspill` must be on the compositor's `PATH`. Check with
@@ -140,9 +143,52 @@ textspill start      # start recording
 textspill stop       # stop, transcribe, copy, paste
 textspill cancel     # stop and throw the audio away
 textspill status     # idle | recording | transcribing
+textspill preview    # latest provisional text, empty when idle
+textspill preview --json  # text, language, window timing, provisional, error
 ```
 
 `status` never blocks, so it is safe to poll from a bar module.
+
+### Live transcription
+
+Enabled by default for both toggle and push-to-talk. Roughly once per second,
+after the previous inference finishes, the worker makes a valid WAV snapshot of
+the most recent **15 seconds** and sends it to the existing warm daemon.
+The notification is replaced as the text changes; it never takes keyboard focus.
+`textspill preview --json` also exposes the result for a bar or another UI.
+
+This is **rolling-window inference**, not token streaming or Qwen's stateful
+streaming API. That API requires the vLLM backend according to the
+[official Qwen documentation](https://github.com/QwenLM/Qwen3-ASR).
+The existing Transformers installation and model remain sufficient. Expect a
+delay of about one second **plus inference time**; slower hardware updates less
+often. Continuous inference uses more GPU/CPU than the original mode.
+
+Previews are provisional and can revise words. For dictations longer than 15
+seconds the preview shows only the recent window, not an accumulated transcript.
+At stop, the entire WAV goes through the normal final transcription (subject to
+the daemon's existing output token limit). Clipboard and paste happen once, using
+that final result. An in-flight preview can add its remaining inference time to
+the final request because the daemon handles requests sequentially.
+
+Cancel invalidates the session and discards pending previews. A preview failure
+leaves recording and the final transcription path available. New sessions cannot
+publish delayed results from older sessions. No deltas are typed into your app.
+
+To disable previews: `TEXTSPILL_LIVE=0 textspill toggle` (or set that variable in
+the hotkey command). No daemon restart is required for this switch.
+
+Runtime additions, inside the private TextSpill directory:
+
+- `live-session`: identifies the active preview session.
+- `preview.json`: latest result, atomically replaced; removed at stop/cancel.
+- `preview-<session>.wav`: bounded snapshot, removed when the worker exits.
+- `live.log`: worker errors; inspect it if previews are missing.
+
+The new files are created with mode 0600. A forcibly killed worker may leave a
+snapshot behind until the login runtime directory is cleared. Notifications can
+remain visible for up to 2.5 seconds after the last update. Desktop notification
+settings can hide previews; the `preview` command still works.
 
 ### Push-to-talk
 
@@ -151,7 +197,7 @@ do the two halves — only Hyprland's `release` flag on a second binding:
 
 ```lua
 -- Toggle: press to start, press again to transcribe. For longer dictations.
-o.bind("SUPER + PERIOD", "Dictate", "textspill toggle")
+o.bind("CTRL + SHIFT + INSERT", "Dictate", "textspill toggle")
 
 -- Push-to-talk: hold while speaking, release to transcribe. For short ones.
 o.bind("SUPER + SHIFT + PERIOD", "Dictate (hold)", "textspill start")
@@ -195,6 +241,7 @@ between dictations. The detected language is shown in the notification and logge
 | `RUST_LOG=debug` | verbose client logging (`RUST_LOG=debug textspill toggle`) |
 | `TEXTSPILL_PASTE_BACKEND` | `ydotool`, `wtype`, `none` or `auto` (default) |
 | `TEXTSPILL_ASR_MODEL` | another checkpoint, e.g. `Qwen/Qwen3-ASR-1.7B-hf` |
+| `TEXTSPILL_LIVE=0` | disable live previews; final transcription still works |
 
 ## Paste backends
 
@@ -257,21 +304,27 @@ printf 'hej' | wl-copy -n && sleep 2 && ydotool key 42:1 110:1 110:0 42:0
 ```bash
 textspill status                                   # idle
 textspill start && textspill status                # recording
-echo 999999 > "$XDG_RUNTIME_DIR/textspill/recording.pid"
-textspill status                                   # idle — stale PID cleaned up
+textspill cancel && textspill status               # idle
 ```
 
 ## Tests
 
 ```bash
-cargo test                  # 16 tests: state machine, PID handling, lock, IPC protocol
-python3 asr/test_daemon.py  # 18 tests: request validation, socket protocol, vocabulary
+cargo test                  # state, WAV snapshots, input and IPC
+python3 asr/test_daemon.py   # daemon validation and socket protocol
+cargo build
+python3 -m unittest discover -s tests -v  # entire live lifecycle with fake I/O
 ```
 
 The Python suite stubs out Qwen3-ASR, so it needs neither the virtualenv nor a GPU. The
 IPC tests run against a real Unix socket with a scripted daemon, covering the replies that
 matter: success, an error object, invalid JSON, a silent close, and a daemon that never
 answers.
+
+The lifecycle tests use simulated audio and fake notification/clipboard/input
+commands: they never record your microphone or paste into your desktop. They
+check preview-before-stop, one final paste, cancellation, session isolation,
+preview errors, and the offline opt-out.
 
 ## End-to-end test
 
@@ -364,6 +417,7 @@ textspill/
 │   ├── state.rs       PID files, stale-state cleanup, the lock
 │   ├── audio.rs       pw-record lifecycle
 │   ├── ipc.rs         Unix socket client, timeouts, error mapping
+│   ├── live.rs        rolling snapshots, preview worker and session isolation
 │   ├── clipboard.rs   wl-copy
 │   ├── input.rs       ydotool / wtype paste backends
 │   └── notify.rs      notify-send
@@ -380,7 +434,7 @@ protocols, is a change to one file.
 
 ## Roadmap
 
-- Streaming ASR for lower perceived latency
+- Stateful streaming ASR (vLLM) rather than repeated rolling-window inference
 - Native PipeWire capture instead of `pw-record`
 - Context profiles (`textspill --profile coding toggle`) and project vocabularies
 - A recording indicator for Waybar

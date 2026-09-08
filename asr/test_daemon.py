@@ -33,7 +33,7 @@ class StubTranscriber:
         self.behaviour = behaviour
         self.calls: list[Path] = []
 
-    def transcribe(self, audio_path: Path) -> dict[str, str]:
+    def transcribe(self, audio_path: Path, *, preview: bool = False) -> dict[str, str]:
         self.calls.append(audio_path)
         if self.behaviour == "boom":
             raise RuntimeError("CUDA out of memory")
@@ -106,6 +106,37 @@ class RequestValidationTest(unittest.TestCase):
         response = daemon.handle_request(StubTranscriber("boom"), _request(wav))
         self.assertIn("failed to transcribe audio", response["error"])
         self.assertIn("CUDA out of memory", response["error"])
+
+
+class PreviewTest(unittest.TestCase):
+    def test_preview_request_uses_preview_inference(self):
+        wav = _quiet_wav(self)
+        class PreviewOnly:
+            def transcribe(self, path, *, preview=False):
+                if not preview:
+                    raise AssertionError("preview flag was lost")
+                return {"text": "preliminär svenska", "language": "Swedish"}
+        result = daemon.handle_request(PreviewOnly(), json.dumps({
+            "audio_path": str(wav), "preview": True
+        }).encode())
+        self.assertEqual(result["text"], "preliminär svenska")
+
+    def test_preview_rejects_overlong_audio_before_inference(self):
+        wav = _quiet_wav(self)
+        daemon._write_quiet_wav(wav, seconds=16)
+        stub = StubTranscriber()
+        result = daemon.handle_request(stub, json.dumps({
+            "audio_path": str(wav), "preview": True
+        }).encode())
+        self.assertIn("at most 15 seconds", result["error"])
+        self.assertEqual(stub.calls, [])
+
+    def test_preview_flag_must_be_boolean(self):
+        wav = _quiet_wav(self)
+        result = daemon.handle_request(StubTranscriber(), json.dumps({
+            "audio_path": str(wav), "preview": "yes"
+        }).encode())
+        self.assertIn("boolean", result["error"])
 
 
 class WarmUpAudioTest(unittest.TestCase):

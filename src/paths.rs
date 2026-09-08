@@ -71,6 +71,22 @@ impl Paths {
     pub fn lock_file(&self) -> PathBuf {
         self.runtime_dir.join("textspill.lock")
     }
+
+    pub fn live_session(&self) -> PathBuf {
+        self.runtime_dir.join("live-session")
+    }
+
+    pub fn preview(&self) -> PathBuf {
+        self.runtime_dir.join("preview.json")
+    }
+
+    pub fn live_log(&self) -> PathBuf {
+        self.runtime_dir.join("live.log")
+    }
+
+    pub fn live_audio(&self, session: &str) -> PathBuf {
+        self.runtime_dir.join(format!("preview-{session}.wav"))
+    }
 }
 
 #[cfg(test)]

@@ -119,7 +119,7 @@ class Transcriber:
         self._model.eval()
         log.info("model ready in %.1fs", time.monotonic() - started)
 
-    def transcribe(self, audio_path: Path) -> dict[str, str]:
+    def transcribe(self, audio_path: Path, *, preview: bool = False) -> dict[str, str]:
         """Returns `{"text": ..., "language": ...}` for one WAV file."""
         torch = self._torch
         request = {"audio": str(audio_path)}
@@ -133,7 +133,7 @@ class Transcriber:
         )
         with torch.inference_mode():
             output_ids = self._model.generate(
-                **inputs, max_new_tokens=self._max_new_tokens
+                **inputs, max_new_tokens=min(256, self._max_new_tokens) if preview else self._max_new_tokens
             )
         generated = output_ids[:, inputs["input_ids"].shape[1] :]
         parsed = self._processor.decode(generated, return_format="parsed")[0]
@@ -214,9 +214,23 @@ def handle_request(transcriber: Transcriber, payload: bytes) -> dict[str, str]:
     if not audio_path.is_file():
         return {"error": f"no such audio file: {raw_path}"}
 
+    preview = request.get("preview", False)
+    if not isinstance(preview, bool):
+        return {"error": "preview must be a boolean"}
+
     started = time.monotonic()
     try:
-        result = transcriber.transcribe(audio_path)
+        if preview:
+            # The Rust worker sends a complete snapshot, never the open WAV
+            # whose RIFF lengths pw-record has not finalised yet.
+            with wave.open(str(audio_path), "rb") as audio:
+                if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, 16000):
+                    raise ValueError("preview requires 16 kHz mono PCM16 WAV")
+                if not 0 < audio.getnframes() <= 15 * 16000:
+                    raise ValueError("preview must contain at most 15 seconds")
+            result = transcriber.transcribe(audio_path, preview=True)
+        else:
+            result = transcriber.transcribe(audio_path)
     except Exception as e:  # noqa: BLE001 - any model failure is a client error
         log.exception("transcription failed")
         return {"error": f"failed to transcribe audio: {e}"}
