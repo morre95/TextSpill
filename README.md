@@ -198,8 +198,13 @@ between dictations. The detected language is shown in the notification and logge
 
 ## Paste backends
 
-TextSpill sends **Shift+Insert**, the one paste binding terminals, browsers, editors and
-GTK/Qt apps all agree on. Ctrl+V means "literal next" in some terminals.
+TextSpill defaults to **Shift+Insert**, which works in the tested terminals,
+Neovim and Joplin. On Hyprland, the focused window class `Chatgpt` uses
+**Ctrl+V** instead, because Shift+Insert opens an unrelated dialog in that app.
+The window is checked just before pasting, with a 500 ms timeout. If detection
+is unavailable, Shift+Insert remains the default. A successful key command
+does not guarantee that the application accepted the paste. Neither shortcut
+sends Enter.
 
 Two backends are tried in order:
 
