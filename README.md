@@ -103,11 +103,15 @@ never grabs a key.
 **Omarchy** — add to `~/.config/hypr/bindings.lua`, where personal overrides live:
 
 ```lua
-o.bind("CTRL + SHIFT + INSERT", "Dictate", "textspill toggle")
+o.bind("CTRL + SHIFT + INSERT", "Dictate (live)", "env TEXTSPILL_LIVE=1 textspill toggle")
+o.bind("SUPER + PERIOD", "Dictate (toggle)", "env TEXTSPILL_LIVE=0 textspill toggle")
 ```
 
-The local toggle binding is `CTRL + SHIFT + INSERT`. Check your compositor's
-existing bindings before assigning it on another machine.
+`CTRL + SHIFT + INSERT` starts/stops recording with live previews.
+`SUPER + .` starts/stops classic dictation without previews. Both paste the final
+text only at stop. The key used to start determines preview mode; both control
+the same recording, so pressing either key during capture stops it.
+Check your compositor's existing bindings before assigning them on another machine.
 `SUPER + SPACE` is the Omarchy menu — if you want that key for dictation, unbind it
 first:
 
@@ -197,7 +201,7 @@ do the two halves — only Hyprland's `release` flag on a second binding:
 
 ```lua
 -- Toggle: press to start, press again to transcribe. For longer dictations.
-o.bind("CTRL + SHIFT + INSERT", "Dictate", "textspill toggle")
+o.bind("SUPER + PERIOD", "Dictate (toggle)", "env TEXTSPILL_LIVE=0 textspill toggle")
 
 -- Push-to-talk: hold while speaking, release to transcribe. For short ones.
 o.bind("SUPER + SHIFT + PERIOD", "Dictate (hold)", "textspill start")
