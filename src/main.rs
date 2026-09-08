@@ -175,7 +175,8 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
         return Ok(());
     };
 
-    live::invalidate(paths)?;
+    let live_progress = live::read(paths)?;
+    remove_if_present(&paths.live_session())?;
     audio::stop(pid)?;
     state::remove_pid(&paths.recording_pid())?;
 
@@ -184,6 +185,10 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
     state::write_pid(&paths.transcribing_pid(), std::process::id() as i32)?;
     let _transcribing = ClearOnDrop(paths.transcribing_pid());
     notify::transcribing();
+
+    if let Some(progress) = live_progress {
+        return live::finish(paths, progress);
+    }
 
     let wav = paths.recording_wav();
     let bytes = std::fs::metadata(&wav)

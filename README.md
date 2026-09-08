@@ -4,8 +4,8 @@
 
 Press a hotkey, talk in Swedish or English, press it again. The transcription lands at
 your cursor — in a terminal, in Claude Code, in Codex, in Firefox, in Neovim.
-While you speak, a live notification shows provisional text. The final text is
-copied and pasted only when you stop.
+Live mode writes short transcribed segments at the cursor while you speak.
+Classic toggle transcribes and pastes only when you stop.
 
 TextSpill **never presses Enter**. It types the text and stops. What you do with it is
 your call.
@@ -32,7 +32,7 @@ Rust client and a warm Python model:
 
 - **`textspill`** (Rust) is the thing your hotkey runs. It starts in a few milliseconds,
   records, asks, pastes, exits. It does no machine learning.
-  A detached Rust worker produces live previews for the current recording.
+  A detached Rust worker transcribes and pastes consecutive audio segments.
 - **`textspill-asr.service`** (Python) loads Qwen3-ASR **once** and keeps it resident.
   A dictation never pays the model load time — that is the whole latency design.
 
@@ -107,9 +107,9 @@ o.bind("CTRL + SHIFT + INSERT", "Dictate (live)", "env TEXTSPILL_LIVE=1 textspil
 o.bind("SUPER + PERIOD", "Dictate (toggle)", "env TEXTSPILL_LIVE=0 textspill toggle")
 ```
 
-`CTRL + SHIFT + INSERT` starts/stops recording with live previews.
-`SUPER + .` starts/stops classic dictation without previews. Both paste the final
-text only at stop. The key used to start determines preview mode; both control
+`CTRL + SHIFT + INSERT` starts/stops live typing in the focused window.
+`SUPER + .` starts/stops classic dictation, pasted only at stop.
+The key used to start determines the mode; both control
 the same recording, so pressing either key during capture stops it.
 Check your compositor's existing bindings before assigning them on another machine.
 `SUPER + SPACE` is the Omarchy menu — if you want that key for dictation, unbind it
@@ -147,7 +147,7 @@ textspill start      # start recording
 textspill stop       # stop, transcribe, copy, paste
 textspill cancel     # stop and throw the audio away
 textspill status     # idle | recording | transcribing
-textspill preview    # latest provisional text, empty when idle
+textspill preview    # accumulated live text, empty when idle
 textspill preview --json  # text, language, window timing, provisional, error
 ```
 
@@ -155,44 +155,48 @@ textspill preview --json  # text, language, window timing, provisional, error
 
 ### Live transcription
 
-Enabled by default for both toggle and push-to-talk. Roughly once per second,
-after the previous inference finishes, the worker makes a valid WAV snapshot of
-the most recent **15 seconds** and sends it to the existing warm daemon.
-The notification is replaced as the text changes; it never takes keyboard focus.
-`textspill preview --json` also exposes the result for a bar or another UI.
+Enabled by default unless `TEXTSPILL_LIVE=0`. Live mode transcribes consecutive
+audio segments and **pastes each segment directly into the focused text field**.
+It prefers a 160 ms quiet interval after at least 1.5 seconds of audio, and flushes
+after four seconds of uninterrupted speech. Expect roughly 2–5 seconds plus
+inference time before a segment appears. It is not instantaneous word-by-word
+typing. The clipboard is used for each insertion.
 
-This is **rolling-window inference**, not token streaming or Qwen's stateful
+This is **segmented inference**, not token streaming or Qwen's stateful
 streaming API. That API requires the vLLM backend according to the
 [official Qwen documentation](https://github.com/QwenLM/Qwen3-ASR).
-The existing Transformers installation and model remain sufficient. Expect a
-delay of about one second **plus inference time**; slower hardware updates less
-often. Continuous inference uses more GPU/CPU than the original mode.
+The existing Transformers installation and model remain sufficient.
+Continuous inference uses more GPU/CPU than classic mode. Segment boundaries
+can split words, particularly during continuous speech, and recognition can be
+less accurate than transcribing the entire dictation with full context.
 
-Previews are provisional and can revise words. For dictations longer than 15
-seconds the preview shows only the recent window, not an accumulated transcript.
-At stop, the entire WAV goes through the normal final transcription (subject to
-the daemon's existing output token limit). Clipboard and paste happen once, using
-that final result. An in-flight preview can add its remaining inference time to
-the final request because the daemon handles requests sequentially.
+Text is append-only: no backspace, selection, automatic correction or Enter.
+At stop, only audio after the last delivered segment is transcribed and appended;
+the entire dictation is never pasted again. The accumulated text is then left
+on the clipboard. An in-flight inference may add to stop latency.
 
-Cancel invalidates the session and discards pending previews. A preview failure
-leaves recording and the final transcription path available. New sessions cannot
-publish delayed results from older sessions. No deltas are typed into your app.
+Cancel stops future insertions but does not erase text already typed. New sessions
+cannot insert delayed replies from old sessions. If a paste fails or the worker
+crashes during delivery, stop refuses to replay an ambiguously delivered segment;
+the WAV and `preview.json` remain for manual recovery. Inference failures preserve
+the audio. Keep the intended field focused: each insertion goes to the current
+cursor, including if you switch windows while dictating.
 
-To disable previews: `TEXTSPILL_LIVE=0 textspill toggle` (or set that variable in
+To use classic mode: `TEXTSPILL_LIVE=0 textspill toggle` (or set that variable in
 the hotkey command). No daemon restart is required for this switch.
 
 Runtime additions, inside the private TextSpill directory:
 
-- `live-session`: identifies the active preview session.
-- `preview.json`: latest result, atomically replaced; removed at stop/cancel.
+- `live-session`: identifies the active live session.
+- `preview.json`: accumulated text, consumed audio offset and delivery status;
+  atomically replaced, removed on successful stop/cancel.
 - `preview-<session>.wav`: bounded snapshot, removed when the worker exits.
-- `live.log`: worker errors; inspect it if previews are missing.
+- `live.log`: worker errors; inspect it if live typing stops.
 
 The new files are created with mode 0600. A forcibly killed worker may leave a
-snapshot behind until the login runtime directory is cleared. Notifications can
-remain visible for up to 2.5 seconds after the last update. Desktop notification
-settings can hide previews; the `preview` command still works.
+snapshot behind until the login runtime directory is cleared.
+`textspill preview --json` exposes progress for inspection; `provisional` is false
+for committed segments. The text cannot be revised automatically after insertion.
 
 ### Push-to-talk
 
@@ -245,7 +249,7 @@ between dictations. The detected language is shown in the notification and logge
 | `RUST_LOG=debug` | verbose client logging (`RUST_LOG=debug textspill toggle`) |
 | `TEXTSPILL_PASTE_BACKEND` | `ydotool`, `wtype`, `none` or `auto` (default) |
 | `TEXTSPILL_ASR_MODEL` | another checkpoint, e.g. `Qwen/Qwen3-ASR-1.7B-hf` |
-| `TEXTSPILL_LIVE=0` | disable live previews; final transcription still works |
+| `TEXTSPILL_LIVE=0` | classic mode: transcribe and paste only at stop |
 
 ## Paste backends
 
@@ -327,8 +331,8 @@ answers.
 
 The lifecycle tests use simulated audio and fake notification/clipboard/input
 commands: they never record your microphone or paste into your desktop. They
-check preview-before-stop, one final paste, cancellation, session isolation,
-preview errors, and the offline opt-out.
+check typing before stop, tail-only final insertion, cancellation, session
+isolation, ambiguous delivery failures, inference errors, and classic mode.
 
 ## End-to-end test
 
@@ -421,7 +425,7 @@ textspill/
 │   ├── state.rs       PID files, stale-state cleanup, the lock
 │   ├── audio.rs       pw-record lifecycle
 │   ├── ipc.rs         Unix socket client, timeouts, error mapping
-│   ├── live.rs        rolling snapshots, preview worker and session isolation
+│   ├── live.rs        audio segments, live typing and delivery tracking
 │   ├── clipboard.rs   wl-copy
 │   ├── input.rs       ydotool / wtype paste backends
 │   └── notify.rs      notify-send

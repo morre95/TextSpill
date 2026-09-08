@@ -42,6 +42,11 @@ if name == "wl-copy":
     (root / "clipboard").write_bytes(sys.stdin.buffer.read())
 elif name == "wl-paste":
     sys.stdout.buffer.write((root / "clipboard").read_bytes())
+elif name == "ydotool":
+    if os.environ.get("TEST_PASTE_FAIL"):
+        sys.exit(1)
+    with (root / "typed").open("ab") as typed:
+        typed.write((root / "clipboard").read_bytes())
 elif name == "notify-send":
     print("123")
 '''
@@ -63,7 +68,7 @@ class FakeModel:
             time.sleep(float(os.environ.get("TEST_PREVIEW_DELAY", "0")))
             if os.environ.get("TEST_PREVIEW_FAIL"):
                 raise RuntimeError("preview unavailable")
-        return {"text": "preliminär svenska" if preview else "färdig svensk text", "language":"Swedish"}
+        return {"text": "live svenska" if preview and path.name != "preview-final.wav" else "färdig svensk text", "language":"Swedish"}
 d._install_shutdown_handler()
 d.serve(Path(sys.argv[2]), FakeModel())
 '''
@@ -128,22 +133,25 @@ class LiveLifecycle(unittest.TestCase):
             self.wait_for(lambda: not list(self.runtime.glob("preview-*.wav")))
             self.tmp.cleanup()
 
-    def test_preview_before_stop_then_one_final_paste(self):
+    def test_live_types_before_stop_and_final_only_appends_tail(self):
         self.start_server()
         self.run_cli("toggle")
         self.wait_for(lambda: (self.runtime / "preview.json").exists())
+        self.wait_for(lambda: json.loads(self.run_cli("preview", "--json"))["consumed_bytes"] > 0)
         self.assertEqual(self.run_cli("status"), "recording")
         preview = json.loads(self.run_cli("preview", "--json"))
-        self.assertEqual(preview["text"], "preliminär svenska")
-        self.assertTrue(preview["provisional"])
-        self.assertFalse((self.root / "clipboard").exists())
-        self.assertFalse(any(name == "ydotool" for name, _ in self.tools()))
+        self.assertEqual(preview["text"], "live svenska")
+        self.assertFalse(preview["provisional"])
+        self.wait_for(lambda: (self.root / "typed").exists())
+        self.assertEqual((self.root / "typed").read_text(), "live svenska")
+        time.sleep(.3)
         self.run_cli("toggle")
         self.assertEqual(self.run_cli("status"), "idle")
         self.assertEqual(self.run_cli("preview", "--json"), "null")
-        self.assertEqual((self.root / "clipboard").read_text(), "färdig svensk text")
-        self.assertEqual(sum(name == "ydotool" for name, _ in self.tools()), 1)
-        self.assertFalse(self.requests()[-1]["preview"])
+        self.assertEqual((self.root / "typed").read_text(), "live svenska färdig svensk text")
+        self.assertEqual((self.root / "clipboard").read_text(), (self.root / "typed").read_text())
+        self.assertEqual(sum(name == "ydotool" for name, _ in self.tools()), 2)
+        self.assertLess(self.requests()[-1]["frames"], self.requests()[0]["frames"])
         self.assertFalse((self.runtime / "recording.wav").exists())
 
     def test_cancel_during_inference_discards_delayed_reply(self):
@@ -163,8 +171,25 @@ class LiveLifecycle(unittest.TestCase):
         self.wait_for(lambda: (self.runtime / "preview.json").exists())
         self.assertIn("preview unavailable", json.loads(self.run_cli("preview", "--json"))["error"])
         self.assertEqual(self.run_cli("status"), "recording")
-        self.run_cli("stop")
-        self.assertEqual((self.root / "clipboard").read_text(), "färdig svensk text")
+        # Disable injected model failure for stop's snapshot inference.
+        # This server fails every preview call, so final safely fails and
+        # retains the audio instead of pasting a partial/duplicate transcript.
+        result = subprocess.run([str(BINARY), "stop"], env=self.env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.runtime / "recording.wav").exists())
+        self.assertFalse((self.root / "typed").exists())
+
+    def test_failed_paste_is_not_automatically_replayed_at_stop(self):
+        self.start_server()
+        self.env['TEST_PASTE_FAIL'] = '1'
+        self.run_cli('start')
+        self.wait_for(lambda: (self.runtime / 'preview.json').exists())
+        self.wait_for(lambda: json.loads(self.run_cli('preview', '--json'))['error'] is not None)
+        calls = sum(name == 'ydotool' for name, _ in self.tools())
+        result = subprocess.run([str(BINARY), 'stop'], env=self.env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sum(name == 'ydotool' for name, _ in self.tools()), calls)
+        self.assertTrue((self.runtime / 'recording.wav').exists())
 
     def test_new_recording_rejects_previous_sessions_delayed_reply(self):
         self.start_server(TEST_PREVIEW_DELAY="1.5")
