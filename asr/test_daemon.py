@@ -215,7 +215,11 @@ def _quiet_wav(case: unittest.TestCase) -> Path:
 def _tempdir():
     import tempfile
 
-    return tempfile.TemporaryDirectory()
+    directory = tempfile.TemporaryDirectory()
+    # serve() briefly changes the process-wide umask in another test thread.
+    # Restore traversal permission if mkdir raced that socket-creation window.
+    Path(directory.name).chmod(0o700)
+    return directory
 
 
 if __name__ == "__main__":

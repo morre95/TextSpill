@@ -29,6 +29,9 @@ with wave.open(sys.argv[-1], "wb") as audio:
     while running:
         audio.writeframes(b"\\x01\\x00" * 1600)
         time.sleep(.1)
+        if os.environ.get("TEST_CAPTURE_PAUSE"):
+            while running:
+                time.sleep(.1)
 '''
 
 TOOL = '''#!/usr/bin/env python3
@@ -89,6 +92,7 @@ class LiveLifecycle(unittest.TestCase):
             path.write_text(content)
             path.chmod(0o700)
         self.env = dict(os.environ, XDG_RUNTIME_DIR=str(self.root),
+                        XDG_CONFIG_HOME=str(self.root / "config"), TEXTSPILL_BACKEND="local",
                         PATH=str(bindir) + os.pathsep + os.environ["PATH"],
                         TEST_ROOT=str(self.root), TEXTSPILL_LIVE="1",
                         TEXTSPILL_PASTE_BACKEND="ydotool")

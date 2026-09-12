@@ -16,6 +16,21 @@ pub struct Paths {
 }
 
 impl Paths {
+    pub fn config_dir() -> Result<PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
+            .context("HOME or XDG_CONFIG_HOME is required for TextSpill settings")?;
+        Ok(base.join("textspill"))
+    }
+
+    pub fn session_config(&self) -> PathBuf {
+        self.runtime_dir.join("session-config.json")
+    }
+    pub fn stream_state(&self) -> PathBuf {
+        self.runtime_dir.join("stream.json")
+    }
     /// Resolves `$XDG_RUNTIME_DIR/textspill/`, creating it with mode 0700.
     ///
     /// Refuses to use a directory owned by anyone else: on the `/tmp` fallback

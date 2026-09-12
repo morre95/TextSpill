@@ -41,11 +41,7 @@ struct Response {
 }
 
 /// A successful transcription.
-#[derive(Debug)]
-pub struct Transcription {
-    pub text: String,
-    pub language: Option<String>,
-}
+pub use crate::transcription::Transcription;
 
 /// Sends `wav` to the daemon at `socket` and waits for the transcription.
 pub fn transcribe(socket: &Path, wav: &Path, read_timeout: Duration) -> Result<Transcription> {

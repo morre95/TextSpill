@@ -160,7 +160,7 @@ fn publish_error(paths: &Paths, session: &str, recorder: i32, error: &str) -> Re
     Ok(())
 }
 
-fn publish(paths: &Paths, preview: &Preview) -> Result<()> {
+pub(crate) fn publish(paths: &Paths, preview: &Preview) -> Result<()> {
     let temporary = paths.preview().with_extension("tmp");
     private_file(&temporary)?.write_all(&serde_json::to_vec(preview)?)?;
     fs::rename(temporary, paths.preview())?;
@@ -208,7 +208,7 @@ fn transcribe_segment(
     ipc::preview(&paths.asr_socket(), snapshot)
 }
 
-fn deliver(
+pub(crate) fn deliver(
     paths: &Paths,
     progress: &mut Preview,
     frame: &Frame,
@@ -290,15 +290,15 @@ impl Drop for SnapshotCleanup {
     }
 }
 
-struct Frame {
-    pcm: Vec<u8>,
-    start: u64,
-    end: u64,
+pub(crate) struct Frame {
+    pub pcm: Vec<u8>,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// Parse only headers, then seek straight to the bounded PCM tail. RIFF and
 /// data lengths may be zero/stale while the recorder is still writing.
-fn snapshot_pcm(source: &mut File, start: u64) -> Result<Option<Frame>> {
+pub(crate) fn snapshot_pcm(source: &mut File, start: u64) -> Result<Option<Frame>> {
     source.rewind()?;
     let length = source.metadata()?.len();
     if length < 44 {

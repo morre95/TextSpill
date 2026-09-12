@@ -7,6 +7,10 @@ your cursor — in a terminal, in Claude Code, in Codex, in Firefox, in Neovim.
 Live mode writes short transcribed segments at the cursor while you speak.
 Classic toggle transcribes and pastes only when you stop.
 
+Choose **local Qwen3-ASR** or **Deepgram** during installation. Deepgram is intended
+for Omarchy computers without the RAM or GPU capacity for local inference. It uses
+your API account and sends recorded audio to Deepgram over TLS.
+
 TextSpill **never presses Enter**. It types the text and stops. What you do with it is
 your call.
 
@@ -28,7 +32,7 @@ your call.
             └──────────────────────┘
 ```
 
-Rust client and a warm Python model:
+The diagram above shows the local backend: a Rust client and a warm Python model.
 
 - **`textspill`** (Rust) is the thing your hotkey runs. It starts in a few milliseconds,
   records, asks, pastes, exits. It does no machine learning.
@@ -38,12 +42,18 @@ Rust client and a warm Python model:
 
 They talk over `$XDG_RUNTIME_DIR/textspill/asr.sock` with one line of JSON each way.
 
+With Deepgram, the Rust client communicates directly with the API: HTTPS for classic
+dictation and one WebSocket per live recording. No Python environment, local model,
+or ASR service is needed. Microphone capture and clipboard/paste remain local.
+
 ## Install
 
 ### 1. System packages
 
 ```bash
-sudo pacman -S --needed rust pipewire pipewire-audio wl-clipboard libnotify ydotool python312
+sudo pacman -S --needed rust pipewire pipewire-audio wl-clipboard libnotify ydotool
+# Local Qwen3-ASR only:
+sudo pacman -S --needed python312
 ```
 
 | Package | Provides | Used for |
@@ -53,7 +63,7 @@ sudo pacman -S --needed rust pipewire pipewire-audio wl-clipboard libnotify ydot
 | `wl-clipboard` | `wl-copy`, `wl-paste` | clipboard |
 | `ydotool` | `ydotool`, `ydotoold` | the Shift+Insert keystroke |
 | `libnotify` | `notify-send` | on-screen feedback |
-| `python312` | Python 3.12 | the ASR virtualenv (PyTorch lags the newest Python) |
+| `python312` | Python 3.12 | local backend only: the ASR virtualenv |
 
 `wtype` is an optional alternative to `ydotool` — see [Paste backends](#paste-backends).
 
@@ -65,14 +75,36 @@ cd textspill
 ./install.sh
 ```
 
-`install.sh` builds the binary into `~/.local/bin/textspill`, creates the ASR virtualenv
-in `~/.local/share/textspill/venv`, symlinks the daemon there (so editing the repo takes
-effect on the next restart) and installs the user service. It downloads PyTorch, so
-expect a few GB and a few minutes.
+`install.sh` builds the binary into `~/.local/bin/textspill` and asks which backend
+to use. For a scripted installation, pass `--backend local` or `--backend deepgram`.
+Without an interactive terminal it keeps the saved selection, or defaults to local.
+
+Local installation creates the ASR virtualenv in `~/.local/share/textspill/venv`,
+symlinks the daemon there and installs its user service. Expect several GB of
+PyTorch downloads. Deepgram skips all those steps. Switching to Deepgram stops and
+disables an installed TextSpill ASR service to release memory; its files are retained.
+Rerunning the installer preserves the API key, language and other saved settings.
 
 Make sure `~/.local/bin` is on your `PATH`.
 
-### 3. The ASR daemon
+### 3. Configure your transcription backend
+
+**Deepgram:** create an API key with transcription access in your Deepgram account.
+The installer does not ask for or store your key. Configure it separately:
+
+```bash
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/textspill"
+(umask 077; touch "${XDG_CONFIG_HOME:-$HOME/.config}/textspill/deepgram-api-key")
+chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/textspill/deepgram-api-key"
+$EDITOR "${XDG_CONFIG_HOME:-$HOME/.config}/textspill/deepgram-api-key"
+```
+
+Put only the key in that file. Alternatively set `DEEPGRAM_API_KEY`, which overrides
+the file. A variable exported in a terminal may not reach Omarchy hotkeys; the file
+works for both. No ASR service needs to be started. Deepgram usage is billed to your
+account; see [Deepgram pricing](https://deepgram.com/pricing) for current charges.
+
+**Local Qwen3-ASR:** start the daemon:
 
 ```bash
 systemctl --user enable --now textspill-asr.service
@@ -155,7 +187,17 @@ textspill preview --json  # text, language, window timing, provisional, error
 
 ### Live transcription
 
-Enabled by default unless `TEXTSPILL_LIVE=0`. Live mode transcribes consecutive
+Enabled by default unless `TEXTSPILL_LIVE=0`. The backend selected at recording
+start determines how audio is processed.
+
+**Deepgram:** audio is streamed continuously as 16 kHz mono PCM, in chunks of about
+100 ms. Nova-3 uses `interim_results=true` and `endpointing=300`. Only finalized
+results are pasted; provisional hypotheses are never inserted or used to replace
+text. At stop, the worker sends the remaining audio and `CloseStream`, waits for
+final results, and puts the accumulated text on the clipboard. It does not send
+the entire recording again. `status` and `cancel` remain responsive during this wait.
+
+**Local Qwen3-ASR:** live mode transcribes consecutive
 audio segments and **pastes each segment directly into the focused text field**.
 It prefers a 160 ms quiet interval after at least 1.5 seconds of audio, and flushes
 after four seconds of uninterrupted speech. Expect roughly 2–5 seconds plus
@@ -192,6 +234,9 @@ Runtime additions, inside the private TextSpill directory:
   atomically replaced, removed on successful stop/cancel.
 - `preview-<session>.wav`: bounded snapshot, removed when the worker exits.
 - `live.log`: worker errors; inspect it if live typing stops.
+- `session-config.json`: backend, language and mode frozen at recording start;
+  contains no API key.
+- `stream.json`: Deepgram worker identity, lifecycle phase and failure information.
 
 The new files are created with mode 0600. A forcibly killed worker may leave a
 snapshot behind until the login runtime directory is cleared.
@@ -221,6 +266,23 @@ is a "Nothing recorded" notification, never a recording left running.
 
 ## Configuration
 
+### Backend settings
+
+Settings live in `${XDG_CONFIG_HOME:-$HOME/.config}/textspill/config.json`:
+
+```json
+{
+  "backend": "deepgram",
+  "deepgram_language": "sv"
+}
+```
+
+Use `./install.sh --backend local|deepgram` to switch installations, including service
+management. `textspill configure` prints the saved backend; `textspill configure
+--backend deepgram` changes the setting only. Missing configuration defaults to
+local. Environment overrides take precedence; backend, language and live/classic
+mode are frozen for each recording, so the stop hotkey cannot switch them.
+
 ### Vocabulary
 
 Qwen3-ASR is biased towards a list of terms you actually say, so it writes *Hyprland* and
@@ -239,8 +301,16 @@ a long list dilutes the bias.
 
 ### Language
 
-None needed. Qwen3-ASR identifies the language itself, so Swedish and English can alternate
-between dictations. The detected language is shown in the notification and logged.
+Local Qwen3-ASR identifies the language itself, so Swedish and English can alternate
+between dictations. Deepgram defaults to Swedish (`sv`); set `deepgram_language` to
+`en` for English, or use `TEXTSPILL_DEEPGRAM_LANGUAGE=en textspill start` for one
+recording. Notifications show the configured Deepgram language.
+
+This version supports `sv` and `en` with Nova-3. Swedish is supported as a separate
+language but is not included in Nova-3's multilingual `multi` mode; automatic
+Swedish/English switching within a stream is not provided. See
+[Deepgram's language list](https://developers.deepgram.com/docs/models-languages-overview).
+The local vocabulary file is not sent to Deepgram.
 
 ### Environment variables
 
@@ -250,6 +320,9 @@ between dictations. The detected language is shown in the notification and logge
 | `TEXTSPILL_PASTE_BACKEND` | `ydotool`, `wtype`, `none` or `auto` (default) |
 | `TEXTSPILL_ASR_MODEL` | another checkpoint, e.g. `Qwen/Qwen3-ASR-1.7B-hf` |
 | `TEXTSPILL_LIVE=0` | classic mode: transcribe and paste only at stop |
+| `TEXTSPILL_BACKEND` | override saved backend: `local` or `deepgram` |
+| `TEXTSPILL_DEEPGRAM_LANGUAGE` | override Deepgram language: `sv` (default) or `en` |
+| `DEEPGRAM_API_KEY` | override the separate API-key file |
 
 ## Paste backends
 
@@ -334,6 +407,13 @@ commands: they never record your microphone or paste into your desktop. They
 check typing before stop, tail-only final insertion, cancellation, session
 isolation, ambiguous delivery failures, inference errors, and classic mode.
 
+Deepgram tests use a local HTTP/WebSocket peer and fake desktop tools. Installer
+tests use a temporary checkout and fake build/service commands. They require no
+API key, GPU or microphone. Debug builds accept `_TEXTSPILL_TEST_DEEPGRAM_ENDPOINT`
+only for an HTTP endpoint at `127.0.0.1`; release builds always use Deepgram's TLS
+endpoints. Test both backend installation choices and use a debug build for the
+Python lifecycle suite.
+
 ## End-to-end test
 
 ```bash
@@ -358,6 +438,23 @@ RUST_LOG=info textspill toggle
 ```
 
 ## Troubleshooting
+
+**Deepgram cannot authenticate.** Configure `DEEPGRAM_API_KEY` or the private key
+file described above. HTTP 401/403 indicates credentials or permissions, 402 an
+account/payment issue, and 429 a rate limit. The key is never included in errors.
+
+**Deepgram disconnects or stops typing.** Recording continues until stop/cancel.
+Stop reports the error and retains `recording.wav` and `preview.json` in
+`$XDG_RUNTIME_DIR/textspill/`. Read `preview.json` directly for already committed
+text after the session has ended; `textspill preview` is empty when idle. Copy the
+files somewhere safe before another `start`, which clears the previous recording.
+There is no automatic reconnect, retransmission, or local-model fallback. Text
+already pasted remains in the application; do not paste the full recording's
+transcript over it without checking for duplicates.
+
+Connection setup is limited to 10 seconds, classic transcription to 120 seconds,
+and stop waits at most 30 seconds for streaming completion (plus bounded desktop
+operations). Cancel invalidates pending results and never erases already typed text.
 
 Wayland has a few sharp edges. Roughly in order of how often they bite:
 

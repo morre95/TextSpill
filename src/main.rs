@@ -1,18 +1,20 @@
 //! TextSpill — system-wide voice-to-text for Linux.
 //! Speak, transcribe, spill text wherever your cursor is.
 //!
-//! The hotkey path is deliberately thin. All the expensive work — loading
-//! Qwen3-ASR — happens once, in `textspill-asr.service`; this binary only
-//! records, asks the warm daemon, and types the answer.
+//! Records and pastes through either the warm local Qwen3-ASR daemon or Deepgram.
 
 mod audio;
 mod clipboard;
+mod config;
+mod deepgram;
 mod input;
 mod ipc;
 mod live;
 mod notify;
 mod paths;
 mod state;
+mod stream;
+mod transcription;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -20,11 +22,6 @@ use paths::Paths;
 use state::State;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::Duration;
-
-/// Upper bound on how long we wait for Qwen3-ASR. Generous, because the very
-/// first request after the daemon starts also warms CUDA kernels.
-const TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A WAV shorter than this holds no speech worth sending.
 /// 16 kHz × 1 channel × 2 bytes ≈ 32 kB per second, plus a 44-byte header.
@@ -43,6 +40,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print the saved backend, or select one without changing other settings.
+    Configure {
+        #[arg(long, value_enum)]
+        backend: Option<config::Backend>,
+    },
     /// Start recording, or stop and spill the transcription. Bind this to a hotkey.
     Toggle,
     /// Start recording.
@@ -60,6 +62,8 @@ enum Command {
     },
     #[command(hide = true)]
     LiveWorker { session: String, recorder: i32 },
+    #[command(hide = true)]
+    StreamWorker { session: String, recorder: i32 },
 }
 
 fn main() -> ExitCode {
@@ -90,8 +94,13 @@ fn init_tracing() {
 }
 
 fn run(command: Command) -> Result<()> {
+    if let Command::Configure { backend } = command {
+        return config::configure(backend);
+    }
     let paths = Paths::new()?;
     match command {
+        Command::Configure { .. } => unreachable!(),
+        Command::StreamWorker { session, recorder } => stream::worker(&paths, &session, recorder),
         Command::LiveWorker { session, recorder } => live::worker(&paths, &session, recorder),
         Command::Preview { json } => {
             let preview = live::read(&paths)?;
@@ -110,24 +119,18 @@ fn run(command: Command) -> Result<()> {
             println!("{}", state::current(&paths)?);
             Ok(())
         }
-        Command::Toggle => with_lock(&paths, cmd_toggle),
-        Command::Start => with_lock(&paths, cmd_start),
-        Command::Stop => with_lock(&paths, cmd_stop),
-        Command::Cancel => with_lock(&paths, cmd_cancel),
-    }
-}
-
-/// Runs a state-changing command under the runtime lock, so that two hotkey
-/// presses cannot both observe `idle` and both start a recorder.
-fn with_lock(paths: &Paths, action: fn(&Paths) -> Result<()>) -> Result<()> {
-    let _lock = state::acquire_lock(paths)?;
-    action(paths)
-}
-
-fn cmd_toggle(paths: &Paths) -> Result<()> {
-    match state::current(paths)? {
-        State::Recording { .. } => cmd_stop(paths),
-        _ => cmd_start(paths),
+        Command::Toggle | Command::Start | Command::Stop | Command::Cancel => {
+            let lock = state::acquire_lock(&paths)?;
+            match command {
+                Command::Toggle if matches!(state::current(&paths)?, State::Recording { .. }) => {
+                    cmd_stop(&paths, lock)
+                }
+                Command::Toggle | Command::Start => cmd_start(&paths),
+                Command::Stop => cmd_stop(&paths, lock),
+                Command::Cancel => cmd_cancel(&paths),
+                _ => unreachable!(),
+            }
+        }
     }
 }
 
@@ -144,9 +147,16 @@ fn cmd_start(paths: &Paths) -> Result<()> {
         State::Idle => {}
     }
 
+    // Validate credentials before clearing audio retained from an earlier failure.
+    let settings = config::SessionConfig {
+        config: config::Config::effective()?,
+        live: std::env::var("TEXTSPILL_LIVE").as_deref() != Ok("0"),
+    };
+    config::write_json(&paths.session_config(), &settings)?;
     let wav = paths.recording_wav();
     let log = paths.capture_log();
     live::invalidate(paths)?;
+    remove_if_present(&paths.stream_state())?;
     // Drop any recording kept from a previous failure before overwriting it.
     remove_if_present(&wav)?;
 
@@ -163,20 +173,31 @@ fn cmd_start(paths: &Paths) -> Result<()> {
         state::remove_pid(&paths.recording_pid())?;
         return Err(e);
     }
-    if let Err(error) = live::start(paths, pid) {
+    if settings.config.backend == config::Backend::Deepgram && settings.live {
+        if let Err(error) = stream::start(paths, pid, &settings.config.deepgram_language) {
+            let _ = audio::stop(pid);
+            state::remove_pid(&paths.recording_pid())?;
+            remove_if_present(&paths.live_session())?;
+            return Err(error);
+        }
+    } else if let Err(error) = live::start(paths, pid) {
         tracing::warn!(%error, "live preview unavailable; recording continues");
     }
     Ok(())
 }
 
-fn cmd_stop(paths: &Paths) -> Result<()> {
+fn cmd_stop(paths: &Paths, lock: state::Lock) -> Result<()> {
     let State::Recording { pid } = state::current(paths)? else {
         notify::info("Not recording");
         return Ok(());
     };
 
+    let settings = config::SessionConfig::load(paths)?;
+    let streaming = settings.config.backend == config::Backend::Deepgram && settings.live;
     let live_progress = live::read(paths)?;
-    remove_if_present(&paths.live_session())?;
+    if !streaming {
+        remove_if_present(&paths.live_session())?;
+    }
     audio::stop(pid)?;
     state::remove_pid(&paths.recording_pid())?;
 
@@ -185,6 +206,12 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
     state::write_pid(&paths.transcribing_pid(), std::process::id() as i32)?;
     let _transcribing = ClearOnDrop(paths.transcribing_pid());
     notify::transcribing();
+
+    if streaming {
+        let session = stream::request_finish(paths)?;
+        drop(lock);
+        return stream::finish(paths, &session);
+    }
 
     if let Some(progress) = live_progress {
         return live::finish(paths, progress);
@@ -203,7 +230,7 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
 
     // On any failure below, `recording.wav` is deliberately left in place so
     // the dictation can be retried or recovered by hand.
-    let result = ipc::transcribe(&paths.asr_socket(), &wav, TRANSCRIBE_TIMEOUT)?;
+    let result = transcription::transcribe(paths, &settings.config, &wav)?;
     let text = sanitize(&result.text);
     if text.is_empty() {
         tracing::info!("ASR returned no speech");
@@ -228,8 +255,16 @@ fn cmd_stop(paths: &Paths) -> Result<()> {
 }
 
 fn cmd_cancel(paths: &Paths) -> Result<()> {
+    let current = state::current(paths)?;
+    let cancel_stream = matches!(current, State::Transcribing) && paths.stream_state().exists();
     live::invalidate(paths)?;
-    let State::Recording { pid } = state::current(paths)? else {
+    if cancel_stream {
+        remove_if_present(&paths.recording_wav())?;
+        remove_if_present(&paths.stream_state())?;
+        notify::cancelled();
+        return Ok(());
+    }
+    let State::Recording { pid } = current else {
         notify::info("Not recording");
         return Ok(());
     };
