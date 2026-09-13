@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "purpose": "feasibility_only",
+  "threads": 4,
+  "window_seconds": 4,
+  "repeats": 3,
+  "model_load_seconds": 1.5314343310001277,
+  "peak_process_rss_mib": 795.36328125,
+  "models": {
+    "cam_sha256": "b50810498b5bcf5773d086f6993d344476bd0c88b566a41e8d801aaf8461efad",
+    "wesep_sha256": "3d0502171eab31b7cf25835f35d1969b415bb95f2ac52e2c5e2a743ebd8f90e5",
+    "config_sha256": "3bd99d6029a837f9db4a6e57e2cd7bf2f9af226dc3be95ae9862d34af628530d"
+  },
+  "packages": {
+    "torch": "2.5.1+cpu",
+    "torchaudio": "2.5.1+cpu",
+    "onnxruntime": "1.20.1",
+    "numpy": "1.26.4",
+    "soundfile": "0.12.1"
+  },
+  "enrollment_sha256": "828f51095254c3a9ef3f455ecffa187582640bbac1978f472443c558946b16dd",
+  "enrollment_seconds": 3.0,
+  "fixture_provenance": {
+    "demo_revision": "c3212546b3d42328c059562b7a94508dd3833094",
+    "source_sha256": {
+      "enroll_1.wav": "e7c9b3f91a6e229fa20ae70642bc06af52868fd12d580614e1490ee78cc2fbb8",
+      "enroll_2.wav": "a0e32cba16c9bc594109531ed92779b7ec53c5503d4db34590b242ecbf32f099",
+      "enroll2_zh.wav": "c39040d13fabacb4d458199a1350ee4755da69675c92b2254b0c0024d9677661",
+      "mixture.wav": "1f6e6868552021a7bb7c290982d7415254c48903e6553c5a1d380f82da405958"
+    }
+  },
+  "fixture_limitations": [
+    "3-second enrollment; 2\u20134 second evaluation clips",
+    "same-recording split for enrollment and positive clean test",
+    "English/Chinese only; not Swedish; no threshold calibration"
+  ],
+  "all_windows_faster_than_realtime": true,
+  "production_ready": false,
+  "limitations": [
+    "Non-overlapping windows: live overlap processing would add work.",
+    "No production threshold or calibrated error-rate estimate.",
+    "No ASR, word error rate, microphone capture, or text delivery.",
+    "Peak RSS includes model loading and the Python runtime."
+  ],
+  "results": [
+    {
+      "name": "target",
+      "language": "en",
+      "target_present": true,
+      "audio_sha256": "c4f501ad8773eb9264aed50a22eca7d45a5c5d3d2d02d9fd689fc6c075e40571",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.7562016248703003,
+      "extracted_cosine": 0.7586237788200378,
+      "extraction_seconds": [
+        0.9988900929997726,
+        0.9587832080001135,
+        1.0071554890000698
+      ],
+      "verification_seconds": [
+        0.045552729000064573,
+        0.0454252610002186,
+        0.04530841599989799
+      ],
+      "median_rtf": 0.5222214109999186,
+      "output_rms": 0.008194169829350784,
+      "input_si_sdr_db": 137.55594539963778,
+      "output_si_sdr_db": 31.423893488155237
+    },
+    {
+      "name": "other",
+      "language": "en",
+      "target_present": false,
+      "audio_sha256": "3166e8813ef9cbaa3f1ad5bb658ed4d3742fa03bbc5623cbbfad104f0bec2fc9",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.03668797016143799,
+      "extracted_cosine": -0.052087023854255676,
+      "extraction_seconds": [
+        0.9804937779999818,
+        0.9600368320002417,
+        0.9623934900000677
+      ],
+      "verification_seconds": [
+        0.04526006200012489,
+        0.04525244400019801,
+        0.04504400199994052
+      ],
+      "median_rtf": 0.5037187460000041,
+      "output_rms": 0.0001867386028297436
+    },
+    {
+      "name": "overlap",
+      "language": "en",
+      "target_present": true,
+      "audio_sha256": "6896162183d8c5467f40272eff964fdbee500a1debd08175f389fcd227f2586f",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.11001984030008316,
+      "extracted_cosine": 0.7386007905006409,
+      "extraction_seconds": [
+        0.96658863499988,
+        0.9733240099999421,
+        0.9632162570001128
+      ],
+      "verification_seconds": [
+        0.045071311999890895,
+        0.045100850999915565,
+        0.04553024999995614
+      ],
+      "median_rtf": 0.5058299734998855,
+      "output_rms": 0.004032423875315322,
+      "input_si_sdr_db": -0.9306688861432351,
+      "output_si_sdr_db": 16.12983189385615
+    },
+    {
+      "name": "louder_other",
+      "language": "en",
+      "target_present": true,
+      "audio_sha256": "04e42a046435c26e2b67fe67d9978306dd10c3d020f52dcdac19436ca914acdc",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.04546945542097092,
+      "extracted_cosine": 0.6956621408462524,
+      "extraction_seconds": [
+        0.998492140000053,
+        0.9824741130000803,
+        0.9700211590002255
+      ],
+      "verification_seconds": [
+        0.045178166999903624,
+        0.046942850000050385,
+        0.045347802999913256
+      ],
+      "median_rtf": 0.5147084815000653,
+      "output_rms": 0.0019720210362135717,
+      "input_si_sdr_db": -10.694864005989313,
+      "output_si_sdr_db": 11.619662732953241
+    },
+    {
+      "name": "silence",
+      "language": "none",
+      "target_present": false,
+      "audio_sha256": "20eaebffe1816e0ffa6f7f854f5ef4ea80d5349faaf0ce1fec1b713e7fde58fa",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": null,
+      "extracted_cosine": null,
+      "extraction_seconds": [
+        1.113401034999697,
+        0.9869293940000716,
+        0.9822113410000384
+      ],
+      "verification_seconds": [
+        0.00011399899995012674,
+        0.00011124100001325132,
+        0.00011621599969657836
+      ],
+      "median_rtf": 0.49352031750004244,
+      "output_rms": 0.0
+    },
+    {
+      "name": "official_mixture",
+      "language": "en",
+      "target_present": true,
+      "audio_sha256": "63f55ee0dd6a6df5a99bebd553ac117d1a0ab95dfe8329a86c1625bc39b8711f",
+      "start_seconds": 0.0,
+      "audio_seconds": 4.0,
+      "raw_cosine": 0.14893090724945068,
+      "extracted_cosine": 0.61412513256073,
+      "extraction_seconds": [
+        1.9706050419999883,
+        2.0195126900002833,
+        2.029653726000106
+      ],
+      "verification_seconds": [
+        0.08486005200029467,
+        0.08524740299981204,
+        0.08487829299974692
+      ],
+      "median_rtf": 0.5261900232500238,
+      "output_rms": 0.005663731502587738
+    },
+    {
+      "name": "three_speakers",
+      "language": "en+zh",
+      "target_present": true,
+      "audio_sha256": "9b3ed8d1335ceb133e965c80c12613183016c9ee3effbfe651a34ebd8bf6c36f",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.13672474026679993,
+      "extracted_cosine": 0.6218432188034058,
+      "extraction_seconds": [
+        1.0129062050000357,
+        0.9718867120000141,
+        0.9683216460002768
+      ],
+      "verification_seconds": [
+        0.04543722700009312,
+        0.04529787000001306,
+        0.045775127000069915
+      ],
+      "median_rtf": 0.5085922910000136,
+      "output_rms": 0.0035733574131002767,
+      "input_si_sdr_db": -3.049075729388908,
+      "output_si_sdr_db": -0.6917072267356812
+    },
+    {
+      "name": "two_others",
+      "language": "en+zh",
+      "target_present": false,
+      "audio_sha256": "5f419918808da7a25e5d460e9a6ec4c7b8df48be41d5107318b4f50e27886e55",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.06092902272939682,
+      "extracted_cosine": -0.04947842285037041,
+      "extraction_seconds": [
+        0.9695006059996558,
+        1.00425235900002,
+        1.0164948830001777
+      ],
+      "verification_seconds": [
+        0.045391487999950186,
+        0.04652159599982042,
+        0.045290944000043964
+      ],
+      "median_rtf": 0.5253869774999202,
+      "output_rms": 0.004050168889259486
+    },
+    {
+      "name": "speaker_turn",
+      "language": "en",
+      "target_present": true,
+      "audio_sha256": "132f8c25f45338caa50ee0907c219575a544a3a37c276c8080cc2e24f3a35259",
+      "start_seconds": 0.0,
+      "audio_seconds": 2.0,
+      "raw_cosine": 0.21258385479450226,
+      "extracted_cosine": 0.6843084692955017,
+      "extraction_seconds": [
+        0.9830167029999757,
+        1.0136439789998803,
+        0.9715120339997156
+      ],
+      "verification_seconds": [
+        0.04651698900033807,
+        0.04666427299980569,
+        0.04510897299996941
+      ],
+      "median_rtf": 0.5147668460001569,
+      "output_rms": 0.00685504118712134,
+      "input_si_sdr_db": -0.06749332849125449,
+      "output_si_sdr_db": 31.461860824131065
+    }
+  ]
+}

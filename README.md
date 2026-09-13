@@ -539,6 +539,9 @@ protocols, is a change to one file.
 
 ## Roadmap
 
+- Enrolled-speaker filtering with CAM++ verification and local voice extraction:
+  [CPU evaluation and current integration gate](speaker/README.md). This is not
+  yet available as a dictation feature.
 - Stateful streaming ASR (vLLM) rather than repeated rolling-window inference
 - Native PipeWire capture instead of `pw-record`
 - Context profiles (`textspill --profile coding toggle`) and project vocabularies
