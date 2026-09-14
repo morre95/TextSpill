@@ -50,6 +50,31 @@ def load_manifest(directory: Path) -> tuple[Path, dict]:
     return path, data
 
 
+def inspect_case_audio(path: Path, data: dict) -> tuple[list[str], list[tuple[str, str]]]:
+    missing = []
+    invalid = []
+    for case in data["cases"]:
+        audio = (path.parent / case["audio"]).resolve()
+        if not audio.is_file():
+            missing.append(case["name"])
+            continue
+        try:
+            ev.read_audio(audio)
+        except (OSError, RuntimeError, ValueError) as error:
+            invalid.append((case["name"], str(error)))
+    return missing, invalid
+
+
+def repair_missing_cases(path: Path, data: dict, missing: list[str]) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"manifest.backup-{stamp}.json")
+    private_json(backup, data)
+    missing_set = set(missing)
+    data["cases"] = [case for case in data["cases"] if case["name"] not in missing_set]
+    private_json(path, data)
+    return backup
+
+
 def init_dataset(directory: Path) -> Path:
     directory = directory.resolve()
     path = manifest_path(directory)
@@ -322,6 +347,19 @@ def run_evaluation(args: argparse.Namespace) -> int:
         raise ValueError("enrollment is missing; run the enroll command first")
     if not manifest["cases"]:
         raise ValueError("dataset has no cases; run capture or add first")
+    missing, invalid = inspect_case_audio(path, manifest)
+    if missing:
+        names = ", ".join(missing[:5])
+        remainder = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+        raise ValueError(
+            f"{len(missing)} manifest case(s) have no audio: {names}{remainder}; "
+            f"run: bash speaker/calibrate.sh doctor {args.directory} --remove-missing"
+        )
+    if invalid:
+        name, error = invalid[0]
+        raise ValueError(
+            f"{len(invalid)} case audio file(s) are invalid; first is {name}: {error}"
+        )
     namespace = argparse.Namespace(
         manifest=path,
         cam=args.cam,
@@ -374,7 +412,34 @@ def show_dataset(directory: Path) -> None:
     print(f"Cases: {len(data['cases'])}")
     for (split, kind), count in sorted(counts.items()):
         print(f"  {split:<12} {kind:<9} {count}")
+    missing, invalid = inspect_case_audio(path, data)
+    if missing:
+        print(f"Warning: {len(missing)} case(s) reference missing audio files")
+    if invalid:
+        print(f"Warning: {len(invalid)} case(s) contain invalid audio files")
     print(f"Manifest: {path}")
+
+
+def doctor_dataset(args: argparse.Namespace) -> None:
+    path, data = load_manifest(args.directory)
+    missing, invalid = inspect_case_audio(path, data)
+    if not missing and not invalid:
+        print(f"Dataset is consistent: {len(data['cases'])} case audio files are valid")
+        return
+    if missing:
+        print(f"Missing audio ({len(missing)}):")
+        for name in missing:
+            print(f"  {name}")
+    if invalid:
+        print(f"Invalid audio ({len(invalid)}):")
+        for name, error in invalid:
+            print(f"  {name}: {error}")
+    if args.remove_missing and missing:
+        backup = repair_missing_cases(path, data, missing)
+        print(f"Removed {len(missing)} missing references from the manifest")
+        print(f"Backup: {backup}")
+    elif missing:
+        print("No changes made. Pass --remove-missing to repair the manifest.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -417,6 +482,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = subparsers.add_parser("show", help="summarize the dataset")
     show.add_argument("directory", type=Path)
+
+    doctor = subparsers.add_parser("doctor", help="find and optionally remove broken case references")
+    doctor.add_argument("directory", type=Path)
+    doctor.add_argument(
+        "--remove-missing", action="store_true",
+        help="back up the manifest and remove cases whose WAV file is missing",
+    )
     return parser
 
 
@@ -451,12 +523,14 @@ def main() -> int:
         return run_evaluation(args)
     elif args.command == "show":
         show_dataset(args.directory)
+    elif args.command == "doctor":
+        doctor_dataset(args)
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
         print(f"calibrate: {error}", file=os.sys.stderr)
         raise SystemExit(1)

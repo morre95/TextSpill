@@ -167,6 +167,15 @@ bash speaker/calibrate.sh show target/my-speaker
 bash speaker/calibrate.sh run target/my-speaker --threads 4
 ```
 
+If `show` warns about manifest entries whose WAV files are missing, inspect and
+repair them before evaluation. Repair creates a timestamped private backup of
+the complete manifest before removing only the dangling references:
+
+```bash
+bash speaker/calibrate.sh doctor target/my-speaker
+bash speaker/calibrate.sh doctor target/my-speaker --remove-missing
+```
+
 The report is written privately to `target/my-speaker/report.json`. Read
 `personal_calibration.selected_threshold`, then judge its calibration and
 held-out `false_acceptance_rate` (FAR) and `false_rejection_rate` (FRR)

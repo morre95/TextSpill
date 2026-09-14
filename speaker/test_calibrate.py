@@ -81,6 +81,25 @@ class CalibrationTests(unittest.TestCase):
                     minimum_seconds=15,
                 )
 
+    def test_doctor_repairs_missing_references_and_keeps_a_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "personal"
+            manifest_path = calibrate.init_dataset(dataset)
+            _, manifest = calibrate.load_manifest(dataset)
+            manifest["cases"] = [
+                {"name": "missing", "audio": "audio/missing.wav", "target_present": True},
+                {"name": "present", "audio": "audio/present.wav", "target_present": False},
+            ]
+            sf.write(dataset / "audio/present.wav", np.ones(16000) * .01, 16000)
+            calibrate.private_json(manifest_path, manifest)
+            missing, invalid = calibrate.inspect_case_audio(manifest_path, manifest)
+            self.assertEqual(missing, ["missing"])
+            self.assertEqual(invalid, [])
+            backup = calibrate.repair_missing_cases(manifest_path, manifest, missing)
+            self.assertTrue(backup.is_file())
+            _, repaired = calibrate.load_manifest(dataset)
+            self.assertEqual([case["name"] for case in repaired["cases"]], ["present"])
+
 
 if __name__ == "__main__":
     unittest.main()
