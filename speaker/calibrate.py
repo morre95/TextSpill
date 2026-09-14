@@ -98,6 +98,31 @@ def import_audio(source: Path, destination: Path, minimum_seconds: int) -> float
     return duration
 
 
+def validate_recording(
+    path: Path,
+    returncode: int,
+    stderr: str,
+    requested_seconds: float,
+    minimum_seconds: int,
+) -> tuple[np.ndarray, float]:
+    detail = stderr.strip() or "no diagnostic output"
+    try:
+        pcm = ev.read_audio(path)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(f"pw-record failed with status {returncode}: {detail}") from error
+    duration = len(pcm) / ev.RATE
+    required = max(minimum_seconds, requested_seconds * 0.9)
+    if duration < required:
+        raise ValueError(
+            f"pw-record produced only {duration:.1f}s (wanted {requested_seconds:g}s); "
+            f"status {returncode}: {detail}"
+        )
+    # pw-record commonly reports SIGINT as a nonzero process status even though
+    # SIGINT is how its documented recording lifecycle finalises the WAV. The
+    # format and duration checks above are the authoritative success criteria.
+    return pcm, duration
+
+
 def record_audio(destination: Path, seconds: float, minimum_seconds: int) -> float:
     recorder = shutil.which("pw-record")
     if recorder is None:
@@ -122,12 +147,9 @@ def record_audio(destination: Path, seconds: float, minimum_seconds: int) -> flo
             process.kill()
             _, stderr = process.communicate()
             raise ValueError("pw-record did not stop cleanly")
-        if process.returncode:
-            raise ValueError(f"pw-record failed: {stderr.strip() or process.returncode}")
-        pcm = ev.read_audio(temporary)
-        duration = len(pcm) / ev.RATE
-        if duration < minimum_seconds:
-            raise ValueError(f"recording is only {duration:.1f}s")
+        _, duration = validate_recording(
+            temporary, process.returncode, stderr, seconds, minimum_seconds
+        )
         temporary.chmod(0o600)
         os.replace(temporary, destination)
         destination.chmod(0o600)

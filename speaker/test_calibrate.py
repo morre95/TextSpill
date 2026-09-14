@@ -4,6 +4,8 @@ import tempfile
 import unittest
 
 import calibrate
+import numpy as np
+import soundfile as sf
 
 
 def row(name: str, target: bool, score: float | None) -> dict:
@@ -59,6 +61,25 @@ class CalibrationTests(unittest.TestCase):
         for name in ["../voice", "/tmp/voice", "Voice", "", "a.b"]:
             with self.subTest(name=name), self.assertRaises(ValueError):
                 calibrate.validate_name(name)
+
+    def test_valid_recording_is_accepted_when_sigint_status_is_nonzero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.wav"
+            sf.write(path, np.ones(18 * 16000) * .01, 16000, subtype="PCM_16")
+            _, duration = calibrate.validate_recording(
+                path, -2, str(path), requested_seconds=20, minimum_seconds=15
+            )
+            self.assertEqual(duration, 18)
+
+    def test_short_recording_reports_process_status_and_diagnostic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recording.wav"
+            sf.write(path, np.ones(2 * 16000) * .01, 16000, subtype="PCM_16")
+            with self.assertRaisesRegex(ValueError, "status 1: device disconnected"):
+                calibrate.validate_recording(
+                    path, 1, "device disconnected", requested_seconds=20,
+                    minimum_seconds=15,
+                )
 
 
 if __name__ == "__main__":
