@@ -22,6 +22,7 @@ import evaluate as ev
 
 MIN_ENROLLMENT_SECONDS = 15
 MIN_CASE_SECONDS = 1
+DEFAULT_PERSONAL_WINDOW_SECONDS = 6
 SAFE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
@@ -367,6 +368,7 @@ def run_evaluation(args: argparse.Namespace) -> int:
         threads=args.threads,
         window_seconds=args.window_seconds,
         repeats=args.repeats,
+        quiet=True,
     )
     report = add_calibration(ev.evaluate(namespace), manifest)
     output = path.parent / "report.json"
@@ -477,7 +479,11 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="evaluate and select a personal threshold")
     run.add_argument("directory", type=Path)
     run.add_argument("--threads", type=int, default=4)
-    run.add_argument("--window-seconds", type=float, default=4)
+    # Captured cases default to five seconds. A six-second evaluation window
+    # keeps each case whole instead of manufacturing an unscorable <1s tail.
+    run.add_argument(
+        "--window-seconds", type=float, default=DEFAULT_PERSONAL_WINDOW_SECONDS
+    )
     run.add_argument("--repeats", type=int, default=3)
 
     show = subparsers.add_parser("show", help="summarize the dataset")

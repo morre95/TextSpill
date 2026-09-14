@@ -17,6 +17,7 @@ from pathlib import Path
 import resource
 import statistics
 import time
+import warnings
 
 import numpy as np
 import soundfile as sf
@@ -108,7 +109,16 @@ class Separator:
         check_hash(model_dir / "config.yaml", CONFIG_SHA256)
         from wesep import load_model_local
 
-        self.model = load_model_local(str(model_dir))
+        # This pinned checkpoint is hash-verified immediately above. Suppress
+        # PyTorch's generic warning from the upstream loader; it is actionable
+        # for arbitrary pickle inputs, not for this exact verified file.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"You are using `torch\.load` with `weights_only=False`.*",
+                category=FutureWarning,
+            )
+            self.model = load_model_local(str(model_dir))
         self.model.set_device("cpu")
         # Peak normalization would amplify residual speech when the target is
         # absent and can divide by zero for silent output. Keep native levels.
@@ -226,7 +236,8 @@ def evaluate(args: argparse.Namespace) -> dict:
                 row["input_si_sdr_db"] = si_sdr(reference, part)
                 row["output_si_sdr_db"] = si_sdr(reference, output)
             rows.append(row)
-            print(json.dumps(row, allow_nan=False), flush=True)
+            if not getattr(args, "quiet", False):
+                print(json.dumps(row, allow_nan=False), flush=True)
     manifest_data = json.loads(args.manifest.read_text())
     return {
         "schema_version": 1, "purpose": "feasibility_only",

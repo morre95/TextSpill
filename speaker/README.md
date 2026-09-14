@@ -167,6 +167,11 @@ bash speaker/calibrate.sh show target/my-speaker
 bash speaker/calibrate.sh run target/my-speaker --threads 4
 ```
 
+Personal calibration defaults to six-second evaluation windows so each
+five-second captured case receives one CAM++ score. Passing four seconds would
+split every capture into a four-second window and an unscorable sub-second tail,
+which is useful for explicit short-tail experiments but not threshold fitting.
+
 If `show` warns about manifest entries whose WAV files are missing, inspect and
 repair them before evaluation. Repair creates a timestamped private backup of
 the complete manifest before removing only the dangling references:
