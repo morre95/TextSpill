@@ -75,7 +75,26 @@ say "Installing Python dependencies (this downloads PyTorch, ~2-3 GB)"
 
 say "Installing the user service"
 mkdir -p "$units"
-install -m644 "$repo/systemd/textspill-asr.service" "$units/textspill-asr.service"
+# Quote systemd arguments, including its literal percent escape.
+systemd_quote() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//%/%%}"
+    printf '"%s"' "$value"
+}
+while IFS= read -r line; do
+    if [[ "$line" == ExecStart=* ]]; then
+        # ':' disables variable expansion; env accepts interpreter paths whose
+        # special characters systemd forbids in the executable position.
+        printf 'ExecStart=:/usr/bin/env %s %s\n' \
+            "$(systemd_quote "$share/venv/bin/python")" \
+            "$(systemd_quote "$share/daemon.py")"
+    else
+        printf '%s\n' "$line"
+    fi
+done < "$repo/systemd/textspill-asr.service" > "$units/textspill-asr.service"
+chmod 644 "$units/textspill-asr.service"
 systemctl --user daemon-reload
 else
     say "Using Deepgram: audio is sent to Deepgram and billed to your API account"

@@ -136,6 +136,11 @@ pub fn paste() -> Result<Option<Backend>> {
     bail!("no paste backend worked ({})", failures.join("; "));
 }
 
+/// Whether this invocation should inject input or only update the clipboard.
+pub fn paste_enabled() -> Result<bool> {
+    Ok(!selected_backends()?.is_empty())
+}
+
 fn selected_backends() -> Result<Vec<Backend>> {
     match std::env::var("TEXTSPILL_PASTE_BACKEND").as_deref() {
         Err(_) | Ok("") | Ok("auto") => Ok(BACKENDS.to_vec()),

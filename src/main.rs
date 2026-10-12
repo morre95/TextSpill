@@ -4,6 +4,7 @@
 //! Records and pastes through either the warm local Qwen3-ASR daemon or Deepgram.
 
 mod audio;
+mod audio_format;
 mod clipboard;
 mod config;
 mod deepgram;
@@ -25,7 +26,7 @@ use std::process::ExitCode;
 
 /// A WAV shorter than this holds no speech worth sending.
 /// 16 kHz × 1 channel × 2 bytes ≈ 32 kB per second, plus a 44-byte header.
-const MIN_AUDIO_BYTES: u64 = 44 + 32_000 / 4;
+const MIN_AUDIO_BYTES: u64 = audio_format::WAV_HEADER_BYTES + audio_format::bytes_for_millis(250);
 
 #[derive(Parser)]
 #[command(

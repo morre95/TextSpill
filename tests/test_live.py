@@ -17,6 +17,7 @@ BINARY = ROOT / "target/debug/textspill"
 
 RECORDER = '''#!/usr/bin/env python3
 import ctypes, os, signal, sys, time, wave
+assert sys.argv[1:-1] == ["--rate", "16000", "--channels", "1", "--format", "s16", "--"]
 ctypes.CDLL(None).prctl(15, b"pw-record", 0, 0, 0)
 running = True
 def stop(*_):
@@ -168,6 +169,28 @@ class LiveLifecycle(unittest.TestCase):
         self.assertEqual(self.run_cli("preview", "--json"), "null")
         self.assertEqual(len(self.tools()), count, "late reply must not show a notification")
         self.assertFalse((self.root / "clipboard").exists())
+
+    def test_clipboard_only_live_accumulates_segments_and_final_tail(self):
+        self.start_server()
+        self.env["TEXTSPILL_PASTE_BACKEND"] = "none"
+        self.run_cli("start")
+        self.wait_for(lambda: (self.runtime / "preview.json").exists())
+        first = json.loads(self.run_cli("preview", "--json"))
+        self.wait_for(lambda: json.loads(self.run_cli("preview", "--json"))["consumed_bytes"]
+                      > first["consumed_bytes"])
+        progress = json.loads(self.run_cli("preview", "--json"))
+        self.assertEqual(progress["text"], "live svenska live svenska")
+        self.assertEqual((self.root / "clipboard").read_text(), progress["text"])
+        self.assertIsNone(progress["error"])
+        self.assertFalse(progress["delivery_pending"])
+        time.sleep(.3)
+        self.run_cli("stop")
+        self.assertEqual((self.root / "clipboard").read_text(),
+                         progress["text"] + " färdig svensk text")
+        self.assertFalse((self.root / "typed").exists())
+        self.assertFalse(any(name in ["ydotool", "wtype"] for name, _ in self.tools()))
+        self.assertFalse((self.runtime / "recording.wav").exists())
+        self.assertEqual(self.run_cli("status"), "idle")
 
     def test_preview_failure_keeps_recording_and_final_path(self):
         self.start_server(TEST_PREVIEW_FAIL="1")

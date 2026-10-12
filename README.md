@@ -342,6 +342,8 @@ Two backends are tried in order:
    XWayland clients cannot see it.
 
 Set `TEXTSPILL_PASTE_BACKEND=none` to only fill the clipboard.
+In live mode, the clipboard contains the accumulated finalized transcript and
+is updated as each segment arrives. Stop adds the final tail without typing text.
 
 ## Testing each piece
 

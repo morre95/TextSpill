@@ -1,7 +1,7 @@
 //! One detached worker owns the Deepgram connection and all transcript delivery.
 //! Stop requests a drain under the command lock, then waits WITHOUT that lock.
 use crate::{
-    audio, clipboard,
+    audio, audio_format, clipboard,
     config::{self, SessionConfig},
     deepgram, live, notify,
     paths::Paths,
@@ -24,6 +24,7 @@ use tokio_tungstenite::{
 };
 
 const FINISH_TIMEOUT: Duration = Duration::from_secs(30);
+const CHUNK_BYTES: usize = audio_format::bytes_for_millis(100) as usize;
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -241,8 +242,11 @@ async fn run_stream(
 ) -> Result<()> {
     settings.config.validate_language()?;
     let url = format!(
-        "{endpoint}?model=nova-3&language={}&encoding=linear16&sample_rate=16000&channels=1&punctuate=true&interim_results=true&endpointing=300",
-        settings.config.deepgram_language
+        "{endpoint}?model=nova-3&language={}&encoding={}&sample_rate={}&channels={}&punctuate=true&interim_results=true&endpointing=300",
+        settings.config.deepgram_language,
+        audio_format::STREAM_ENCODING,
+        audio_format::SAMPLE_RATE,
+        audio_format::CHANNELS
     );
     let mut request = url.into_client_request()?;
     let mut header =
@@ -294,7 +298,7 @@ async fn run_stream(
                     }
                     if let Some(frame) = live::snapshot_pcm(source, sent)? {
                         // Catch up after connection setup, but bound each iteration to 1 s.
-                        for chunk in frame.pcm[..frame.pcm.len().min(32000)].chunks(3200) {
+                        for chunk in frame.pcm[..frame.pcm.len().min(audio_format::BYTES_PER_SECOND as usize)].chunks(CHUNK_BYTES) {
                             if !matches_session(paths, session) { return Ok(()); }
                             send(&mut socket, Message::Binary(chunk.to_vec().into())).await?;
                             sent += chunk.len() as u64;
@@ -356,11 +360,11 @@ fn commit_result(
     {
         bail!("invalid Deepgram result timing");
     }
-    let end = (((result.start + result.duration) * 16000.).round() as u64).saturating_mul(2);
+    let end = audio_format::bytes_for_seconds(result.start + result.duration);
     if end <= progress.consumed_bytes {
         return Ok(());
     } // duplicate finalized interval
-    if end > sent + 3200 {
+    if end > sent + CHUNK_BYTES as u64 {
         bail!("Deepgram result exceeds submitted audio");
     }
     let alternative = result

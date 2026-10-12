@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -68,17 +69,51 @@ class Installer(unittest.TestCase):
         self.assertEqual(unit.read_text(), "old service")
 
     def test_local_default_uses_existing_venv_and_installs_service(self):
-        venv = self.root / "data/textspill/venv/bin"
+        share = Path(self.env["XDG_DATA_HOME"]) / "textspill"
+        self.prepare_venv(share)
+        self.install()
+        self.assertIn("pip install --upgrade torch", self.commands())
+        self.assertIn("--user daemon-reload", self.commands())
+        self.assert_service_paths(share)
+        self.assertEqual(json.loads((self.config_dir / "config.json").read_text())["backend"], "local")
+
+    def prepare_venv(self, share):
+        venv = share / "venv/bin"
         venv.mkdir(parents=True)
         for name in ["python", "pip"]:
             tool = venv / name
             tool.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$TEST_INSTALL_LOG"\n')
             tool.chmod(0o755)
-        self.install()
-        self.assertIn("pip install --upgrade torch", self.commands())
-        self.assertIn("--user daemon-reload", self.commands())
-        self.assertTrue((self.root / "config/systemd/user/textspill-asr.service").exists())
-        self.assertEqual(json.loads((self.config_dir / "config.json").read_text())["backend"], "local")
+
+    def assert_service_paths(self, share):
+        unit = self.root / "config/systemd/user/textspill-asr.service"
+        command = next(line.removeprefix("ExecStart=") for line in unit.read_text().splitlines()
+                       if line.startswith("ExecStart="))
+        self.assertTrue(command.startswith(":/usr/bin/env "))
+        # ':' disables environment expansion; percent specifiers still expand.
+        args = [arg.replace("%%", "%") for arg in shlex.split(command)[1:]]
+        self.assertEqual(args, [str(share / "venv/bin/python"), str(share / "daemon.py")])
+        self.assertTrue(all(Path(arg).exists() for arg in args))
+        self.assertEqual(unit.stat().st_mode & 0o777, 0o644)
+
+    def test_local_service_handles_spaces_and_systemd_metacharacters(self):
+        self.env["XDG_DATA_HOME"] = str(self.root / 'data with % and $ and "quotes"')
+        share = Path(self.env["XDG_DATA_HOME"]) / "textspill"
+        self.prepare_venv(share)
+        self.install("--backend", "local")
+        self.assert_service_paths(share)
+        if shutil.which("systemd-analyze"):
+            unit = self.root / "config/systemd/user/textspill-asr.service"
+            result = subprocess.run(["systemd-analyze", "verify", "--man=no", str(unit)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_local_service_uses_default_data_path_when_xdg_is_unset(self):
+        self.env.pop("XDG_DATA_HOME")
+        share = Path(self.env["HOME"]) / ".local/share/textspill"
+        self.prepare_venv(share)
+        self.install("--backend", "local")
+        self.assert_service_paths(share)
 
     def test_invalid_backend_fails_before_build(self):
         result = subprocess.run(["bash", str(self.repo / "install.sh"), "--backend", "bad"],

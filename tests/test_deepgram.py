@@ -71,6 +71,24 @@ class DeepgramLifecycle(unittest.TestCase):
         self.assertTrue(request["wav"] and request["auth"])
         self.assertIn("language=en", request["http"])
 
+    def test_clipboard_only_stream_accumulates_final_results_without_typing(self):
+        self.start_server()
+        self.env["TEXTSPILL_PASTE_BACKEND"] = "none"
+        self.run_cli("start")
+        self.wait_for(lambda: (self.root / "clipboard").exists())
+        self.assertEqual((self.root / "clipboard").read_text(), "live svenska")
+        progress = json.loads(self.run_cli("preview", "--json"))
+        self.assertEqual(progress["text"], "live svenska")
+        self.assertIsNone(progress["error"])
+        self.assertFalse(progress["delivery_pending"])
+        time.sleep(.3)
+        self.run_cli("stop")
+        self.assertEqual((self.root / "clipboard").read_text(), "live svenska sista orden")
+        self.assertFalse((self.root / "typed").exists())
+        self.assertFalse(any(name in ["ydotool", "wtype"] for name, _ in self.tools()))
+        self.assertFalse((self.runtime / "recording.wav").exists())
+        self.assertEqual(self.run_cli("status"), "idle")
+
     def test_missing_key_preserves_previous_audio_and_readonly_commands_work(self):
         self.env.pop("DEEPGRAM_API_KEY")
         wav = self.runtime / "recording.wav"

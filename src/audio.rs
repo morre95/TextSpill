@@ -5,6 +5,7 @@
 //! SIGINT. Everything PipeWire-specific is confined to this module so that a
 //! native capture backend can replace it without touching the rest of TextSpill.
 
+use crate::audio_format;
 use anyhow::{Context, Result, bail};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -15,11 +16,6 @@ use std::time::{Duration, Instant};
 
 /// The executable we spawn, and the `comm` we expect to find in `/proc`.
 pub const PROCESS_NAME: &str = "pw-record";
-
-/// What Qwen3-ASR wants: 16 kHz mono 16-bit PCM.
-const SAMPLE_RATE: &str = "16000";
-const CHANNELS: &str = "1";
-const SAMPLE_FORMAT: &str = "s16";
 
 /// How long a stopped recorder gets to flush the WAV header before SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -41,11 +37,11 @@ pub fn start(wav: &Path, log: &Path) -> Result<i32> {
 
     let child = Command::new(PROCESS_NAME)
         .arg("--rate")
-        .arg(SAMPLE_RATE)
+        .arg(audio_format::SAMPLE_RATE.to_string())
         .arg("--channels")
-        .arg(CHANNELS)
+        .arg(audio_format::CHANNELS.to_string())
         .arg("--format")
-        .arg(SAMPLE_FORMAT)
+        .arg(audio_format::CAPTURE_FORMAT)
         .arg("--")
         .arg(wav)
         .stdin(Stdio::null())

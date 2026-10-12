@@ -4,7 +4,8 @@
 //! into a separate, valid WAV and ask the warm daemon about unconsumed audio.
 //! A session token prevents delayed replies from leaking into another dictation.
 
-use crate::{audio, clipboard, input, ipc, notify, paths::Paths, state};
+use crate::audio_format::BYTES_PER_SECOND;
+use crate::{audio, audio_format, clipboard, input, ipc, notify, paths::Paths, state};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -15,7 +16,6 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const INTERVAL: Duration = Duration::from_millis(1000);
-const BYTES_PER_SECOND: u64 = 32000;
 const WINDOW_BYTES: u64 = 15 * BYTES_PER_SECOND;
 
 #[derive(Serialize, Deserialize)]
@@ -170,23 +170,28 @@ pub(crate) fn publish(paths: &Paths, preview: &Preview) -> Result<()> {
 /// Prefer a short pause after at least 1.5 seconds, otherwise flush at 4 s.
 /// Already emitted text is never selected, erased or rewritten.
 fn segment_boundary(pcm: &[u8]) -> Option<usize> {
-    const MIN: usize = 48000;
-    const MAX: usize = 128000;
-    const QUIET: usize = 5120; // 160 ms at 16 kHz, PCM16
+    const MIN: usize = audio_format::bytes_for_millis(1500) as usize;
+    const MAX: usize = audio_format::bytes_for_millis(4000) as usize;
+    const QUIET: usize = audio_format::bytes_for_millis(160) as usize;
     if pcm.len() < MIN {
         return None;
     }
     let limit = pcm.len().min(MAX);
     let mut quiet = 0;
     let mut boundary = None;
-    for (index, sample) in pcm[..limit].as_chunks::<2>().0.iter().enumerate() {
+    for (index, sample) in pcm[..limit]
+        .as_chunks::<{ audio_format::BYTES_PER_SAMPLE as usize }>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let value = i16::from_le_bytes([sample[0], sample[1]]);
         quiet = if value.unsigned_abs() < 250 {
-            quiet + 2
+            quiet + audio_format::BYTES_PER_SAMPLE as usize
         } else {
             0
         };
-        let end = (index + 1) * 2;
+        let end = (index + 1) * audio_format::BYTES_PER_SAMPLE as usize;
         if end >= MIN && quiet >= QUIET {
             boundary = Some(end);
         }
@@ -221,20 +226,23 @@ pub(crate) fn deliver(
         } else {
             format!(" {text}")
         };
-        clipboard::copy(&addition)?;
-        // Persist intent before injecting input: if the process dies here,
-        // stop must not automatically replay an ambiguously delivered segment.
-        progress.delivery_pending = true;
-        publish(paths, progress)?;
-        if input::paste()?.is_none() {
-            bail!("live typing requires a paste backend");
+        if input::paste_enabled()? {
+            clipboard::copy(&addition)?;
+            // Persist intent before injecting input: if the process dies here,
+            // stop must not replay an ambiguously delivered segment.
+            progress.delivery_pending = true;
+            publish(paths, progress)?;
+            input::paste()?;
+            progress.delivery_pending = false;
+        } else {
+            // Clipboard-only delivery is safe to repeat and keeps all segments.
+            clipboard::copy(&format!("{}{addition}", progress.text))?;
         }
         progress.text.push_str(&addition);
-        progress.delivery_pending = false;
     }
     progress.consumed_bytes = frame.end;
-    progress.window_start_seconds = frame.start as f64 / BYTES_PER_SECOND as f64;
-    progress.audio_seconds = frame.end as f64 / BYTES_PER_SECOND as f64;
+    progress.window_start_seconds = audio_format::seconds_for_bytes(frame.start);
+    progress.audio_seconds = audio_format::seconds_for_bytes(frame.end);
     progress.language = result.language;
     progress.error = None;
     publish(paths, progress)
@@ -301,7 +309,7 @@ pub(crate) struct Frame {
 pub(crate) fn snapshot_pcm(source: &mut File, start: u64) -> Result<Option<Frame>> {
     source.rewind()?;
     let length = source.metadata()?.len();
-    if length < 44 {
+    if length < audio_format::WAV_HEADER_BYTES {
         return Ok(None);
     }
     let mut riff = [0; 12];
@@ -326,7 +334,9 @@ pub(crate) fn snapshot_pcm(source: &mut File, start: u64) -> Result<Option<Frame
             if !valid_format {
                 bail!("capture requires 16 kHz mono PCM16 WAV");
             }
-            let end = ((length - data) & !1).min(start + WINDOW_BYTES);
+            let available = length - data;
+            let end = (available - available % audio_format::BLOCK_ALIGN as u64)
+                .min(start + WINDOW_BYTES);
             if end <= start {
                 return Ok(None);
             }
@@ -344,11 +354,11 @@ pub(crate) fn snapshot_pcm(source: &mut File, start: u64) -> Result<Option<Frame
             }
             let mut fmt = [0; 16];
             source.read_exact(&mut fmt)?;
-            valid_format = fmt[..2] == [1, 0]
-                && fmt[2..4] == [1, 0]
-                && u32::from_le_bytes(fmt[4..8].try_into()?) == 16000
-                && fmt[12..14] == [2, 0]
-                && fmt[14..16] == [16, 0];
+            valid_format = u16::from_le_bytes(fmt[..2].try_into()?) == audio_format::PCM_FORMAT
+                && u16::from_le_bytes(fmt[2..4].try_into()?) == audio_format::CHANNELS
+                && u32::from_le_bytes(fmt[4..8].try_into()?) == audio_format::SAMPLE_RATE
+                && u16::from_le_bytes(fmt[12..14].try_into()?) == audio_format::BLOCK_ALIGN
+                && u16::from_le_bytes(fmt[14..16].try_into()?) == audio_format::BITS_PER_SAMPLE;
         }
         source.seek(SeekFrom::Start(data + size + (size % 2)))?;
     }
@@ -358,10 +368,14 @@ fn write_wav(path: &std::path::Path, pcm: &[u8]) -> Result<()> {
     let mut wav = private_file(path)?;
     wav.write_all(b"RIFF")?;
     wav.write_all(&(36 + pcm.len() as u32).to_le_bytes())?;
-    wav.write_all(b"WAVEfmt \x10\0\0\0\x01\0\x01\0")?;
-    wav.write_all(&16000u32.to_le_bytes())?;
-    wav.write_all(&32000u32.to_le_bytes())?;
-    wav.write_all(b"\x02\0\x10\0data")?;
+    wav.write_all(b"WAVEfmt \x10\0\0\0")?;
+    wav.write_all(&audio_format::PCM_FORMAT.to_le_bytes())?;
+    wav.write_all(&audio_format::CHANNELS.to_le_bytes())?;
+    wav.write_all(&audio_format::SAMPLE_RATE.to_le_bytes())?;
+    wav.write_all(&(BYTES_PER_SECOND as u32).to_le_bytes())?;
+    wav.write_all(&audio_format::BLOCK_ALIGN.to_le_bytes())?;
+    wav.write_all(&audio_format::BITS_PER_SAMPLE.to_le_bytes())?;
+    wav.write_all(b"data")?;
     wav.write_all(&(pcm.len() as u32).to_le_bytes())?;
     wav.write_all(pcm)?;
     Ok(())
